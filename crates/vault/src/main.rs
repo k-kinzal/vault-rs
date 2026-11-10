@@ -14,6 +14,13 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Initialize an encrypted DB generation before measuring deployment acceptance.
+    InitializeStorage {
+        #[arg(long)]
+        database: PathBuf,
+        #[arg(long)]
+        key_config: PathBuf,
+    },
     /// Offline SQLCipher generation rotation; refuses while a service holds the DB.
     RotateStorage {
         #[arg(long)]
@@ -126,6 +133,33 @@ async fn main() -> Result<()> {
     nix::sys::prctl::set_dumpable(false)?;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     match Cli::parse().command {
+        Command::InitializeStorage {
+            database,
+            key_config,
+        } => {
+            anyhow::ensure!(
+                nix::unistd::getuid().is_root() && nix::unistd::geteuid().is_root(),
+                "administrator initialization required"
+            );
+            vault_rs::runner::protected_path(&key_config)?;
+            let parent = database
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("database parent missing"))?;
+            vault_rs::runner::protected_path(parent)?;
+            anyhow::ensure!(
+                database.is_absolute() && parent.canonicalize()? == parent,
+                "canonical absolute database path required"
+            );
+            let key: vault_rs::resident::RuntimeKeyConfig =
+                serde_json::from_slice(&vault_rs::runner::read_bounded(&key_config, 65536)?)?;
+            let protector = key.open()?;
+            let digest = vault_rs::storage::initialize_generation(&database, protector.as_ref())?;
+            println!(
+                "{}",
+                serde_json::json!({"database": database, "key_envelope_sha256": digest, "requires_deployment_acceptance": true})
+            );
+            Ok(())
+        }
         Command::RotateStorage {
             source,
             destination,
@@ -279,16 +313,16 @@ async fn main() -> Result<()> {
             acceptance,
             verification_run,
         } => {
-            require_acceptance(acceptance, &config, verification_run)?;
-            run(config, false, verification_run).await
+            let accepted = require_acceptance(acceptance, &config, verification_run)?;
+            run(config, false, verification_run, accepted).await
         }
         Command::Witness {
             config,
             acceptance,
             verification_run,
         } => {
-            require_acceptance(acceptance, &config, verification_run)?;
-            run(config, true, verification_run).await
+            let accepted = require_acceptance(acceptance, &config, verification_run)?;
+            run(config, true, verification_run, accepted).await
         }
     }
 }
@@ -328,19 +362,20 @@ fn require_acceptance(
     path: Option<PathBuf>,
     config: &std::path::Path,
     verification: bool,
-) -> Result<()> {
+) -> Result<Option<vault_rs::readiness::VerifiedDeployment>> {
     if verification {
         anyhow::ensure!(
             path.is_none(),
             "verification mode cannot assert production acceptance"
         );
         eprintln!("VERIFICATION RUN: production_ready=false; no production acceptance claimed");
-        return Ok(());
+        return Ok(None);
     }
     let path=path.ok_or_else(||anyhow::anyhow!("production start requires --acceptance; use explicit --verification-run only for tests"))?;
     vault_rs::runner::protected_path(&path)?;
     let files = serde_json::from_slice(&vault_rs::runner::read_bounded(&path, 65536)?)?;
-    let deadline = vault_rs::readiness::check_files(&files, config)?;
+    let accepted = vault_rs::readiness::check_configuration(&files, config)?;
+    let deadline = accepted.deadline;
     // Evidence is a lease, not a permanent boolean. Stop accepting operations
     // when it expires; a new signed acceptance requires an explicit restart.
     std::thread::spawn(move || loop {
@@ -351,9 +386,14 @@ fn require_acceptance(
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
     });
-    Ok(())
+    Ok(Some(accepted))
 }
-async fn run(path: PathBuf, witness: bool, verification: bool) -> Result<()> {
+async fn run(
+    path: PathBuf,
+    witness: bool,
+    verification: bool,
+    accepted: Option<vault_rs::readiness::VerifiedDeployment>,
+) -> Result<()> {
     use serde::Deserialize;
     use std::{net::SocketAddr, sync::Arc};
     use vault_rs::{
@@ -410,7 +450,10 @@ async fn run(path: PathBuf, witness: bool, verification: bool) -> Result<()> {
         "service requires the administrator identity, isolated from the AI account"
     );
     vault_rs::runner::protected_path(&path)?;
-    let bytes = vault_rs::runner::read_bounded(&path, 1_000_000)?;
+    let bytes = match &accepted {
+        Some(a) => a.configuration.bytes().to_vec(),
+        None => vault_rs::runner::read_bounded(&path, 1_000_000)?,
+    };
     let config: Config = serde_json::from_slice(&bytes)?;
     for protected in [&config.certificate, &config.tls_key] {
         vault_rs::runner::protected_path(protected)?;
@@ -475,17 +518,27 @@ async fn run(path: PathBuf, witness: bool, verification: bool) -> Result<()> {
                     (Box::new(key), d)
                 }
             };
+        let generation = accepted
+            .as_ref()
+            .map(|a| a.configuration.database_generation(&config.database))
+            .transpose()?;
         if witness {
-            let authority = WitnessAuthority::open(
-                &config.database,
-                config
-                    .operator_public_key
-                    .context("operator_public_key required")?,
-                signer,
-                decryption
-                    .context("witness storage decryption key required")?
-                    .as_ref(),
-            )?;
+            let operator = config
+                .operator_public_key
+                .context("operator_public_key required")?;
+            let protector = decryption.context("witness storage decryption key required")?;
+            let authority = match generation {
+                Some(pin) => WitnessAuthority::open_pinned(
+                    &config.database,
+                    operator,
+                    signer,
+                    protector.as_ref(),
+                    pin,
+                )?,
+                None => {
+                    WitnessAuthority::open(&config.database, operator, signer, protector.as_ref())?
+                }
+            };
             Ok(vault_rs::server::witness_router(Arc::new(authority)))
         } else {
             let decryption = decryption.context("decryption key required")?;
@@ -498,12 +551,22 @@ async fn run(path: PathBuf, witness: bool, verification: bool) -> Result<()> {
                 signer,
                 ca.as_deref(),
             )?;
-            let gate = Gate::open(
-                &config.database,
-                config.trust.context("trust required")?,
-                Arc::new(remote),
-                decryption.clone(),
-            )?;
+            let trust = config.trust.context("trust required")?;
+            let gate = match generation {
+                Some(pin) => Gate::open_pinned(
+                    &config.database,
+                    trust,
+                    Arc::new(remote),
+                    decryption.clone(),
+                    pin,
+                )?,
+                None => Gate::open(
+                    &config.database,
+                    trust,
+                    Arc::new(remote),
+                    decryption.clone(),
+                )?,
+            };
             let issuer = config
                 .postgres
                 .map(|p| -> Result<Arc<dyn vault_rs::extension::Issuer>> {

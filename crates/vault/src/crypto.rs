@@ -81,13 +81,7 @@ pub fn verify<T: Serialize>(domain: &str, signed: &Signed<T>, key: &str) -> Resu
         .context("invalid signature")
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct RecordContext {
-    pub vault: Uuid,
-    pub resource: Uuid,
-    pub version: u64,
-}
+pub type RecordContext = vault_policy::wire::RecordContext<Uuid>;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -174,9 +168,7 @@ pub fn seal_record(
     OsRng.fill_bytes(key.as_mut());
     OsRng.fill_bytes(a.as_mut());
     let mut b = Zeroizing::new([0u8; 32]);
-    for i in 0..32 {
-        b[i] = vault_policy::mask_byte(key[i], a[i]);
-    }
+    vault_policy::split32(&key, &a, &mut b);
     let mut nonce = [0u8; 24];
     OsRng.fill_bytes(&mut nonce);
     let aad = transcript("record", &context)?;
@@ -225,9 +217,7 @@ pub fn open_record(
     guardian_share: &[u8; 32],
 ) -> Result<Zeroizing<Vec<u8>>> {
     let mut key = Zeroizing::new([0u8; 32]);
-    for i in 0..32 {
-        key[i] = vault_policy::join_byte(device_share[i], guardian_share[i]);
-    }
+    vault_policy::join32(device_share, guardian_share, &mut key);
     let nonce = fixed::<24>(&record.nonce)?;
     let aad = transcript("record", &record.context)?;
     let plaintext = XChaCha20Poly1305::new_from_slice(key.as_ref())?

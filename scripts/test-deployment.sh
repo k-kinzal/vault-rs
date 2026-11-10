@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p .tools
-cargo build --locked -p vault-rs --all-features
+cargo build --locked -p vault-rs --all-features --bins --example deployment_fixture
 cargo test --locked -p vault-rs --test deployment --no-run --message-format=json > .tools/deployment-artifacts.jsonl
 task_test_binary=$(python3 - <<'PY'
 import json
@@ -17,6 +17,6 @@ docker run --rm --network none \
   -e VAULT_TEST_RUNNER_BIN=/opt/vault-rs \
   -v "$PWD/target/debug/vault-rs:/test-input/vault-rs:ro" \
   -v "$task_test_binary:/test-input/deployment-tests:ro" \
-  -v "$PWD/tools/deployment-test-helper.py:/test-input/helper.py:ro" \
+  -v "$PWD/target/debug/examples/deployment_fixture:/test-input/helper:ro" \
   vault-rs-tpm-simulation \
-  bash -c 'install -m 755 /test-input/vault-rs /opt/vault-rs && install -m 755 /test-input/helper.py /opt/deployment-test-helper && exec /test-input/deployment-tests --ignored --nocapture --test-threads=1'
+  bash -c 'install -m 755 /test-input/vault-rs /opt/vault-rs && install -m 755 /test-input/helper /opt/deployment-test-helper && exec /test-input/deployment-tests --ignored --nocapture --test-threads=1'

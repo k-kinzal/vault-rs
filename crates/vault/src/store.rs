@@ -19,24 +19,21 @@ use vault_policy::{Committed, State};
 #[serde(deny_unknown_fields)]
 struct Ledger {
     grant_hash: String,
-    epoch: u64,
-    next: u64,
-    remaining: u64,
-    revoked: bool,
-    locked: bool,
+    #[serde(flatten)]
+    state: State,
     challenge: Option<Challenge>,
     pending: Option<StoredIssue>,
     last_issue: Option<String>,
 }
-impl Ledger {
-    fn state(&self) -> State {
-        State {
-            epoch: self.epoch,
-            next: self.next,
-            remaining: self.remaining,
-            revoked: self.revoked,
-            locked: self.locked,
-        }
+impl std::ops::Deref for Ledger {
+    type Target = State;
+    fn deref(&self) -> &State {
+        &self.state
+    }
+}
+impl std::ops::DerefMut for Ledger {
+    fn deref_mut(&mut self) -> &mut State {
+        &mut self.state
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -76,6 +73,24 @@ impl Gate {
         witness: Arc<dyn Witness>,
         unwrapper: Arc<dyn ShareUnwrapper>,
     ) -> Result<Self> {
+        Self::open_generation(path, trust, witness, unwrapper, None)
+    }
+    pub fn open_pinned(
+        path: &Path,
+        trust: Trust,
+        witness: Arc<dyn Witness>,
+        unwrapper: Arc<dyn ShareUnwrapper>,
+        generation: &str,
+    ) -> Result<Self> {
+        Self::open_generation(path, trust, witness, unwrapper, Some(generation))
+    }
+    fn open_generation(
+        path: &Path,
+        trust: Trust,
+        witness: Arc<dyn Witness>,
+        unwrapper: Arc<dyn ShareUnwrapper>,
+        generation: Option<&str>,
+    ) -> Result<Self> {
         parse_public(&trust.owner_public_key)?;
         parse_public(&trust.issuer_public_key)?;
         let audience = reqwest::Url::parse(&trust.audience)?;
@@ -89,7 +104,10 @@ impl Gate {
                 && !trust.audience.ends_with('/'),
             "audience must be an HTTPS origin without trailing slash"
         );
-        let db = crate::storage::open(path, unwrapper.as_ref())?;
+        let db = match generation {
+            Some(pin) => crate::storage::open_pinned(path, unwrapper.as_ref(), pin)?,
+            None => crate::storage::open(path, unwrapper.as_ref())?,
+        };
         db.busy_timeout(std::time::Duration::from_secs(5))?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS grants (id TEXT PRIMARY KEY, body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS records (hash TEXT PRIMARY KEY, body TEXT NOT NULL);")?;
         Ok(Self {
@@ -102,14 +120,12 @@ impl Gate {
     pub fn install(&self, grant: &Signed<Grant>, record: &CiphertextRecord) -> Result<()> {
         validate_grant(&self.trust, grant)?;
         ensure!(
-            object_hash(record)? == grant.payload.record_hash,
-            "record hash mismatch"
-        );
-        ensure!(
-            record.context.vault == grant.payload.vault
-                && record.context.resource == grant.payload.resource
-                && record.context.version == grant.payload.version,
-            "record context mismatch"
+            vault_policy::wire::record_matches_grant(
+                &grant.payload,
+                &record.context,
+                &object_hash(record)?
+            ),
+            "record context or hash mismatch"
         );
         ensure!(
             record.guardian_key == wrapping_key_hash(self.unwrapper.public_key())?,
@@ -133,11 +149,13 @@ impl Gate {
             revision: 0,
             ledger: Ledger {
                 grant_hash: object_hash(grant)?,
-                epoch: grant.payload.epoch,
-                next: 0,
-                remaining: grant.payload.uses,
-                revoked: false,
-                locked: false,
+                state: State {
+                    epoch: grant.payload.epoch,
+                    next: 0,
+                    remaining: grant.payload.uses,
+                    revoked: false,
+                    locked: false,
+                },
                 challenge: None,
                 pending: None,
                 last_issue: None,
@@ -294,11 +312,7 @@ impl Gate {
         let terminal = vault_policy::retired();
         let ledger = Ledger {
             grant_hash: object_hash(&("permanently-quarantined", q.grant))?,
-            epoch: terminal.epoch,
-            next: terminal.next,
-            remaining: terminal.remaining,
-            revoked: terminal.revoked,
-            locked: terminal.locked,
+            state: terminal,
             challenge: None,
             pending: None,
             last_issue: None,
@@ -428,16 +442,12 @@ impl Gate {
         let mut verified = verify_release(&self.trust, req, &record, now)?;
         let challenge = l.challenge.as_ref().context("missing challenge")?;
         ensure!(
-            challenge.nonce == req.operation.nonce
-                && challenge.sequence == req.operation.sequence
-                && now < challenge.expires
-                && req.operation.expires <= challenge.expires,
+            vault_policy::wire::challenge_allows(challenge, &req.operation, now),
             "invalid challenge"
         );
         verified.evidence.witness = true;
-        vault_policy::authorize_and_commit(l.state(), verified.request, verified.evidence, |next| {
-            l.next = next.next;
-            l.remaining = next.remaining;
+        vault_policy::authorize_and_commit(l.state, verified.request, verified.evidence, |next| {
+            l.state = next;
             l.challenge = None;
             l.pending = pending;
             self.commit(tx, req.operation.grant, old, l)?;

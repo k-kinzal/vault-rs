@@ -118,14 +118,7 @@ pub fn ensure_current(request: &ReleaseRequest, now: u64) -> Result<()> {
     let g = &request.grant.payload;
     let o = &request.operation;
     ensure!(
-        vault_policy::request_period(
-            g.not_before,
-            g.expires,
-            o.not_before,
-            o.expires,
-            now,
-            MAX_REQUEST_LIFETIME
-        ),
+        vault_policy::wire::operation_current(g, o, now, MAX_REQUEST_LIFETIME),
         "operation expired before plaintext delivery"
     );
     Ok(())

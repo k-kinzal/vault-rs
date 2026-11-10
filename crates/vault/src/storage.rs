@@ -167,17 +167,41 @@ fn lease(path: &Path, exclusive: bool) -> Result<nix::fcntl::Flock<std::fs::File
     .map_err(|(_, e)| anyhow::anyhow!("database in use: {e}"))
 }
 pub fn open(path: &Path, protector: &dyn ShareUnwrapper) -> Result<Database> {
+    open_generation(path, protector, None)
+}
+/// Use a digest from an authenticated deployment manifest, never one freshly
+/// read from the potentially replaced envelope itself.
+pub fn open_pinned(
+    path: &Path,
+    protector: &dyn ShareUnwrapper,
+    expected_sha256: &str,
+) -> Result<Database> {
+    open_generation(path, protector, Some(expected_sha256))
+}
+fn open_generation(
+    path: &Path,
+    protector: &dyn ShareUnwrapper,
+    expected: Option<&str>,
+) -> Result<Database> {
     let guard = lease(path, false)?;
     Ok(Database {
-        connection: open_unleased(path, protector)?,
+        connection: open_unleased(path, protector, expected)?,
         _lease: guard,
     })
 }
-fn open_unleased(path: &Path, protector: &dyn ShareUnwrapper) -> Result<Connection> {
+fn open_unleased(
+    path: &Path,
+    protector: &dyn ShareUnwrapper,
+    expected: Option<&str>,
+) -> Result<Connection> {
     validate_files(path)?;
     let mut name = path.as_os_str().to_os_string();
     name.push(".key-envelope.json");
     let envelope_path = std::path::PathBuf::from(name);
+    ensure!(
+        expected.is_none() || envelope_path.exists(),
+        "accepted database generation is missing"
+    );
     if !envelope_path.exists() {
         ensure!(
             !path.exists(),
@@ -207,8 +231,15 @@ fn open_unleased(path: &Path, protector: &dyn ShareUnwrapper) -> Result<Connecti
             .sync_all()?;
     }
     private_regular_file(&envelope_path)?;
-    let envelope: Envelope =
-        serde_json::from_slice(&crate::runner::read_bounded(&envelope_path, 4096)?)?;
+    let bytes = crate::runner::read_bounded(&envelope_path, 4096)?;
+    if let Some(expected) = expected {
+        use sha2::{Digest, Sha256};
+        ensure!(
+            hex::encode(Sha256::digest(&bytes)) == expected,
+            "database key generation differs from accepted manifest"
+        );
+    }
+    let envelope: Envelope = serde_json::from_slice(&bytes)?;
     ensure!(
         envelope.public_hash == wrapping_key_hash(protector.public_key())?,
         "wrong database key protector"
@@ -223,8 +254,16 @@ fn open_unleased(path: &Path, protector: &dyn ShareUnwrapper) -> Result<Connecti
             .sync_all()?;
     }
     private_regular_file(path)?;
+    // macOS exposes its temporary directory through /var -> /private/var.
+    // Resolve only the parent; SQLITE_OPEN_NOFOLLOW still rejects a leaf link.
+    // Production configuration separately requires a protected canonical parent.
+    let sqlite_path = path
+        .parent()
+        .context("database parent missing")?
+        .canonicalize()?
+        .join(path.file_name().context("database filename missing")?);
     let db = Connection::open_with_flags(
-        path,
+        sqlite_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_NOFOLLOW,
@@ -245,6 +284,27 @@ fn open_unleased(path: &Path, protector: &dyn ShareUnwrapper) -> Result<Connecti
     Ok(db)
 }
 
+/// Explicit administrative initialization. A failed/partial existing generation
+/// is never overwritten. The caller must authenticate the returned digest.
+pub fn initialize_generation(path: &Path, protector: &dyn ShareUnwrapper) -> Result<String> {
+    ensure!(!path.exists(), "database already exists");
+    let mut envelope = path.as_os_str().to_os_string();
+    envelope.push(".key-envelope.json");
+    let envelope = std::path::PathBuf::from(envelope);
+    ensure!(!envelope.exists(), "database generation already exists");
+    let _lease = lease(path, true)?;
+    let db = open_unleased(path, protector, None)?;
+    // Forces an encrypted first page without introducing application tables.
+    db.execute_batch("PRAGMA user_version=1")?;
+    drop(db);
+    std::fs::File::open(path)?.sync_all()?;
+    std::fs::File::open(path.parent().context("database parent missing")?)?.sync_all()?;
+    use sha2::{Digest, Sha256};
+    Ok(hex::encode(Sha256::digest(crate::runner::read_bounded(
+        &envelope, 4096,
+    )?)))
+}
+
 /// Offline generation rotation. The old database remains an immutable recovery
 /// generation. A new random DEK makes the old envelope unable to open new data.
 /// Switching the server's accepted config to `destination` publishes the result.
@@ -260,9 +320,9 @@ pub fn rotate_generation(
     );
     let _source_lease = lease(source, true)?;
     let _destination_lease = lease(destination, true)?;
-    let source_db = open_unleased(source, old)?;
+    let source_db = open_unleased(source, old, None)?;
     source_db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
-    let destination_db = open_unleased(destination, new)?;
+    let destination_db = open_unleased(destination, new, None)?;
     drop(destination_db);
     let mut name = destination.as_os_str().to_os_string();
     name.push(".key-envelope.json");
@@ -283,7 +343,7 @@ pub fn rotate_generation(
     source_db.query_row("SELECT sqlcipher_export('rotated')", [], |_| Ok(()))?;
     source_db.execute_batch("DETACH DATABASE rotated")?;
     drop(source_db);
-    let verified = open_unleased(destination, new)?;
+    let verified = open_unleased(destination, new, None)?;
     let integrity: String = verified.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     ensure!(
         integrity == "ok",

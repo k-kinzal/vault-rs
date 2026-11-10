@@ -8,15 +8,27 @@ args.output.mkdir(parents=True,exist_ok=True)
 jar=root/".tools/tla2tools.jar"
 assert hashlib.sha256(jar.read_bytes()).hexdigest()=="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88", "unexpected TLC binary"
 cfg=(root/"formal/Vault.cfg").read_text()
-cases=[("baseline",None,None),("without-guardian","RequireGuardian","NoUnauthorizedRelease"),("without-device","RequireDevice","NoUnauthorizedRelease"),("without-witness","RequireWitness","NoReplay"),("release-before-commit","CommitBeforeRelease","CommitBeforeDisclosure")]
+cases=[("baseline",None,None),
+ ("without-guardian","RequireGuardian","NoUnauthorizedRelease"),
+ ("without-device","RequireDevice","NoUnauthorizedRelease"),
+ ("without-witness","RequireWitness","CommitBeforeDisclosure"),
+ ("without-nonce","RequireNonce","NoUnauthorizedRelease"),
+ ("release-before-commit","CommitBeforeRelease","CommitBeforeDisclosure"),
+ ("without-idempotence","RequireIdempotence","OneCredentialPerOperation"),
+ ("honest-release",None,"NoHonestStaticRelease"),
+ ("identical-issue-retry",None,"NoIdenticalIssueRetry"),
+ ("admin-crash-recovery",None,"NoRecoveredAdminCrash")]
+
 results=[]
 for name,flag,expected in cases:
     with tempfile.TemporaryDirectory(prefix="vault-model-") as temp:
         config=pathlib.Path(temp)/"Model.cfg"
-        config.write_text(cfg if flag is None else cfg.replace(f"{flag} = TRUE",f"{flag} = FALSE"))
+        case_config=cfg if flag is None else cfg.replace(f"{flag} = TRUE",f"{flag} = FALSE")
+        if expected and flag is None: case_config += f"\nINVARIANT {expected}\n"
+        config.write_text(case_config)
         (pathlib.Path(temp)/"Vault.tla").write_bytes((root/"formal/Vault.tla").read_bytes())
-        command=["java","-XX:+UseParallelGC","-Xmx1g","-cp",str(jar),"tlc2.TLC","-workers","2","-metadir",temp+"/states","-config","Model.cfg","Vault.tla"]
-        result=subprocess.run(command,cwd=temp,capture_output=True,text=True,timeout=120)
+        command=["java",f"-Djava.io.tmpdir={temp}","-XX:+UseParallelGC","-Xmx1g","-cp",str(jar),"tlc2.TLC","-workers","2","-metadir",temp+"/states","-config","Model.cfg","Vault.tla"]
+        result=subprocess.run(command,cwd=temp,capture_output=True,text=True,timeout=300)
         output=result.stdout+result.stderr
         (args.output/(name+".log")).write_text(output)
         if expected:

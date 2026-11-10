@@ -142,8 +142,29 @@ impl WitnessAuthority {
         signer: Box<dyn ProofSigner>,
         protector: &dyn ShareUnwrapper,
     ) -> Result<Self> {
+        Self::open_generation(path, operator, signer, protector, None)
+    }
+    pub fn open_pinned(
+        path: &Path,
+        operator: String,
+        signer: Box<dyn ProofSigner>,
+        protector: &dyn ShareUnwrapper,
+        generation: &str,
+    ) -> Result<Self> {
+        Self::open_generation(path, operator, signer, protector, Some(generation))
+    }
+    fn open_generation(
+        path: &Path,
+        operator: String,
+        signer: Box<dyn ProofSigner>,
+        protector: &dyn ShareUnwrapper,
+        generation: Option<&str>,
+    ) -> Result<Self> {
         parse_public(&operator)?;
-        let connection = crate::storage::open(path, protector)?;
+        let connection = match generation {
+            Some(pin) => crate::storage::open_pinned(path, protector, pin)?,
+            None => crate::storage::open(path, protector)?,
+        };
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS checkpoints (id TEXT PRIMARY KEY, body TEXT NOT NULL);")?;
         Ok(Self {
             connection: Mutex::new(connection),

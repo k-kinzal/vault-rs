@@ -32,7 +32,8 @@ jobs:
           export OPENSSL_DIR="$(brew --prefix openssl@3)"
           set -o pipefail
           cargo test --locked --workspace --all-features 2>&1 | tee evidence/macos/tests.log
-          cargo build --locked --release --workspace --all-features 2>&1 | tee evidence/macos/build.log
+          cargo build --locked --release --workspace --all-features --bins --example deployment_fixture 2>&1 | tee evidence/macos/build.log
+          bash scripts/test-oauth.sh 2>&1 | tee evidence/macos/oauth.log
           swiftc platform/macos/SecureEnclaveHelper.swift -o /tmp/vault-se-helper 2>&1 | tee evidence/macos/swift.log
           cargo test --locked -p vault-rs --lib --no-run --message-format=json > /tmp/vault-test-build.jsonl
           test_binary=$(python3 -c 'import json; print(next(v["executable"] for line in open("/tmp/vault-test-build.jsonl") if (v:=json.loads(line)).get("reason")=="compiler-artifact" and v.get("profile",{}).get("test") and v.get("executable")))')
@@ -40,6 +41,11 @@ jobs:
           sudo install -m 755 target/release/vault-rs /opt/vault-ci/vault-rs
           sudo install -m 755 "$test_binary" /opt/vault-ci/vault-tests
           sudo env VAULT_TEST_RUNNER_BIN=/opt/vault-ci/vault-rs /opt/vault-ci/vault-tests runner::tests::os_isolation_with_real_uids_and_inherited_pipe --ignored --nocapture --test-threads=1 2>&1 | tee evidence/macos/os-isolation.log
+          cargo test --locked -p vault-rs --test deployment --no-run --message-format=json > /tmp/vault-deployment-build.jsonl
+          deployment_binary=$(python3 -c 'import json; print(next(v["executable"] for line in open("/tmp/vault-deployment-build.jsonl") if (v:=json.loads(line)).get("reason")=="compiler-artifact" and v.get("target",{}).get("name")=="deployment" and v.get("executable")))')
+          sudo install -m 755 target/release/examples/deployment_fixture /opt/deployment-test-helper
+          sudo install -m 755 "$deployment_binary" /opt/vault-ci/deployment-tests
+          sudo env VAULT_TEST_RUNNER_BIN=/opt/vault-ci/vault-rs VAULT_TEST_MACOS_KEY_UID="$(id -u)" /opt/vault-ci/deployment-tests --ignored --nocapture --test-threads=1 2>&1 | tee evidence/macos/deployment.log
           sw_vers > evidence/macos/platform.txt
           shasum -a 256 target/release/vault-rs /tmp/vault-se-helper > evidence/macos/binaries.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

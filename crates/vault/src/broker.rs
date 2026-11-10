@@ -84,20 +84,23 @@ impl BrokerSession {
     ) -> Result<()> {
         validate_grant(trust, grant)?;
         let g = &grant.payload;
+        let recipient = self.recipient.public_key().to_owned();
+        let dpop = self.jwk().thumbprint()?;
+        let key = device.public_key().to_owned();
+        let execution = vault_policy::wire::Execution {
+            instance: &self.instance,
+            recipient: &recipient,
+            artifact: &self.artifact,
+            subject: &self.subject,
+            dpop_thumbprint: &dpop,
+            device: &key,
+        };
         ensure!(
-            g.artifact_hash == self.artifact
-                && g.instance == self.instance
-                && g.recipient == self.recipient.public_key()
-                && g.subject == self.subject
-                && g.dpop_thumbprint == self.jwk().thumbprint()?
-                && g.device_public_key == device.public_key(),
+            vault_policy::wire::execution_matches(g, &execution),
             "grant does not authorize this measured execution"
         );
         ensure!(
-            g.record_hash == object_hash(record)?
-                && g.resource == record.context.resource
-                && g.version == record.context.version
-                && g.vault == record.context.vault,
+            vault_policy::wire::record_matches_grant(g, &record.context, &object_hash(record)?),
             "record outside execution grant"
         );
         Ok(())
@@ -118,6 +121,7 @@ impl BrokerSession {
         self.validate_grant(trust, &grant, record, device)?;
         let g = &grant.payload;
         ensure!(challenge.grant == g.id, "wrong challenge");
+        let token_claims = verified_access_claims(trust, &token)?;
         let operation = Operation {
             vault: g.vault,
             grant: g.id,
@@ -131,11 +135,14 @@ impl BrokerSession {
             sequence: challenge.sequence,
             nonce: challenge.nonce.clone(),
             not_before: now,
-            expires: now
-                .checked_add(MAX_REQUEST_LIFETIME)
-                .context("clock overflow")?
-                .min(challenge.expires)
-                .min(g.expires),
+            expires: vault_policy::wire::bounded_expiry(
+                now,
+                g.expires,
+                challenge.expires,
+                token_claims.exp,
+                MAX_REQUEST_LIFETIME,
+            )
+            .context("authorization expired or clock overflow")?,
             recipient: self.recipient.public_key().into(),
             instance: self.instance,
             artifact_hash: self.artifact.clone(),

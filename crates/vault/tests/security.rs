@@ -1575,3 +1575,65 @@ fn untrusted_extension_cannot_expand_role_or_ttl_or_submit_sql() {
     )
     .is_err());
 }
+
+#[test]
+fn accepted_database_generation_is_required_before_any_unwrap() {
+    struct NoUnwrap {
+        public: String,
+    }
+    impl ShareUnwrapper for NoUnwrap {
+        fn public_key(&self) -> &str {
+            &self.public
+        }
+        fn unwrap(&self, _: &[u8], _: &str) -> Result<Zeroizing<[u8; 32]>> {
+            panic!("replacement generation must be rejected before using the protected key")
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("accepted.db");
+    let protector = guardian();
+    let pin = vault_rs::storage::initialize_generation(&db, protector.as_ref()).unwrap();
+    assert!(vault_rs::storage::initialize_generation(&db, protector.as_ref()).is_err());
+    drop(vault_rs::storage::open_pinned(&db, protector.as_ref(), &pin).unwrap());
+    let envelope = dir.path().join("accepted.db.key-envelope.json");
+    let original = std::fs::read(&envelope).unwrap();
+    // Even a syntactically valid envelope encrypted to the correct public key
+    // is not an authenticated new generation. No private material is used here.
+    let id = Uuid::new_v4();
+    let public =
+        openssl::pkey::PKey::public_key_from_der(&decode(protector.public_key()).unwrap()).unwrap();
+    let mut encryptor = openssl::encrypt::Encrypter::new(&public).unwrap();
+    encryptor
+        .set_rsa_padding(openssl::rsa::Padding::PKCS1_OAEP)
+        .unwrap();
+    encryptor
+        .set_rsa_oaep_md(openssl::hash::MessageDigest::sha256())
+        .unwrap();
+    encryptor
+        .set_rsa_mgf1_md(openssl::hash::MessageDigest::sha256())
+        .unwrap();
+    encryptor
+        .set_rsa_oaep_label(format!("vault-rs/v1/storage/{id}").as_bytes())
+        .unwrap();
+    let mut wrapped = vec![0; encryptor.encrypt_len(&[42; 32]).unwrap()];
+    let length = encryptor.encrypt(&[42; 32], &mut wrapped).unwrap();
+    wrapped.truncate(length);
+    let replacement = serde_json::json!({
+        "id": id, "public_hash": wrapping_key_hash(protector.public_key()).unwrap(),
+        "wrapped": encode(&wrapped)
+    });
+    std::fs::write(&envelope, serde_json::to_vec(&replacement).unwrap()).unwrap();
+    let no_unwrap = NoUnwrap {
+        public: protector.public_key().into(),
+    };
+    let error = vault_rs::storage::open_pinned(&db, &no_unwrap, &pin)
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("differs from accepted manifest"));
+    std::fs::remove_file(&envelope).unwrap();
+    assert!(vault_rs::storage::open_pinned(&db, &no_unwrap, &pin).is_err());
+    std::fs::write(&envelope, original).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&envelope, std::fs::Permissions::from_mode(0o600)).unwrap();
+    drop(vault_rs::storage::open_pinned(&db, protector.as_ref(), &pin).unwrap());
+}

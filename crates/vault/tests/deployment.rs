@@ -1,5 +1,5 @@
 //! Actual CLI processes and HTTPS, with explicitly synthetic native keys in a
-//! disposable container. Never counted as physical-device or macOS execution.
+//! disposable Linux container or macOS runner. Never physical-device evidence.
 mod support;
 use p256::ecdsa::{signature::Signer, Signature, SigningKey};
 use p256::elliptic_curve::Generate;
@@ -116,8 +116,17 @@ fn real_cli_services_broker_two_users_restart_and_revocation() {
     fs::create_dir(&staging).unwrap();
     let binary = PathBuf::from(std::env::var("VAULT_TEST_RUNNER_BIN").unwrap());
     let helper = PathBuf::from("/opt/deployment-test-helper");
+    #[cfg(target_os = "macos")]
+    let key_uid = Some(
+        std::env::var("VAULT_TEST_MACOS_KEY_UID")
+            .unwrap()
+            .parse::<u32>()
+            .unwrap(),
+    );
+    #[cfg(not(target_os = "macos"))]
+    let key_uid: Option<u32> = None;
     let output = Command::new(&helper)
-        .arg("--fixture-init")
+        .args(["--fixture-init", &key_uid.unwrap_or(0).to_string()])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -125,7 +134,7 @@ fn real_cli_services_broker_two_users_restart_and_revocation() {
     use sha2::{Digest, Sha256};
     let helper_hash = hex::encode(Sha256::digest(fs::read(&helper).unwrap()));
     let native = |id: &str, usage: &str| NativeConfig {
-        macos_uid: None,
+        macos_uid: key_uid,
         helper: helper.clone(),
         helper_sha256: helper_hash.clone(),
         key_id: id.into(),
@@ -215,7 +224,7 @@ fn real_cli_services_broker_two_users_restart_and_revocation() {
     .unwrap();
     let rp = root.join("record.json");
     write(&rp, &record);
-    let workload = b"#!/usr/bin/python3\nimport os,sys\nassert os.getuid()>=10000\nassert os.getgid()==os.getuid() and os.getgroups()==[]\nassert sys.stdin.buffer.read()==b'SYNTHETIC AUTHORIZED SECRET'\nassert 'VAULT_PARENT_ONLY' not in os.environ\nprint('WORKLOAD_OK')\n";
+    let workload = b"#!/usr/bin/python3\nimport os,sys\nassert os.getuid()>=10000\nassert os.getgid()==os.getuid() and all(g==os.getuid() for g in os.getgroups())\nassert sys.stdin.buffer.read()==b'SYNTHETIC AUTHORIZED SECRET'\nassert 'VAULT_PARENT_ONLY' not in os.environ\nprint('WORKLOAD_OK')\n";
     let bundle = Bundle {
         entrypoint: "main.py".into(),
         arguments: vec![],

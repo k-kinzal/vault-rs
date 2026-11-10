@@ -10,7 +10,7 @@ default = []
 pkcs11 = ["dep:cryptoki"]
 
 [dependencies]
-vault-policy = { path = "../policy" }
+vault-policy = { path = "../policy", features = ["wire"] }
 anyhow = "1"
 axum = "0.8"
 axum-server = { version = "0.9", features = ["tls-rustls"] }

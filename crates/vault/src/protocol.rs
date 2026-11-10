@@ -11,67 +11,14 @@ use vault_policy::{Evidence, Request};
 
 pub const MAX_REQUEST_LIFETIME: u64 = 30;
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct Trust {
-    pub vault: Uuid,
-    pub audience: String,
-    pub issuer: String,
-    pub issuer_public_key: String,
-    pub owner_public_key: String,
-}
+pub type Trust = vault_policy::wire::Trust<Uuid, String>;
 
-#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Action {
-    Read,
-    Issue,
-}
+pub use vault_policy::wire::Action;
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct Grant {
-    pub vault: Uuid,
-    pub id: Uuid,
-    pub subject: String,
-    pub resource: Uuid,
-    pub version: u64,
-    pub record_hash: String,
-    pub action: Action,
-    pub issue: Option<crate::extension::IssueSpec>,
-    pub epoch: u64,
-    pub not_before: u64,
-    pub expires: u64,
-    pub uses: u64,
-    pub dpop_thumbprint: String,
-    pub device_public_key: String,
-    pub guardian_public_key: String,
-    pub recipient: String,
-    pub instance: Uuid,
-    pub artifact_hash: String,
-}
+pub type Grant = vault_policy::wire::Grant<Uuid, String, Option<crate::extension::IssueSpec>>;
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Operation {
-    pub vault: Uuid,
-    pub grant: Uuid,
-    pub grant_hash: String,
-    pub resource: Uuid,
-    pub version: u64,
-    pub record_hash: String,
-    pub action: Action,
-    pub issue: Option<crate::extension::IssueSpec>,
-    pub epoch: u64,
-    pub sequence: u64,
-    pub nonce: String,
-    pub not_before: u64,
-    pub expires: u64,
-    pub recipient: String,
-    pub instance: Uuid,
-    pub artifact_hash: String,
-    pub access_token_hash: String,
-}
+pub type Operation =
+    vault_policy::wire::Operation<Uuid, String, Option<crate::extension::IssueSpec>>;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -101,14 +48,7 @@ pub struct Quarantine {
     pub expected: crate::witness::Checkpoint,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct Challenge {
-    pub grant: Uuid,
-    pub sequence: u64,
-    pub nonce: String,
-    pub expires: u64,
-}
+pub type Challenge = vault_policy::wire::Challenge<Uuid, String>;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -149,32 +89,9 @@ struct JwtHeader {
     #[serde(default)]
     kid: Option<String>,
 }
-#[derive(Clone, Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct Confirmation {
-    pub jkt: String,
-}
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct AccessClaims {
-    pub iss: String,
-    pub aud: String,
-    pub sub: String,
-    pub exp: u64,
-    pub nbf: u64,
-    pub scope: String,
-    pub grant_id: Uuid,
-    pub cnf: Confirmation,
-}
-#[derive(Clone, Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct DpopClaims {
-    pub jti: String,
-    pub htm: String,
-    pub htu: String,
-    pub iat: u64,
-    pub ath: String,
-    pub nonce: String,
-}
+pub type Confirmation = vault_policy::wire::Confirmation<String>;
+pub type AccessClaims = vault_policy::wire::AccessClaims<Uuid, String, String>;
+pub type DpopClaims = vault_policy::wire::DpopClaims<String, String>;
 
 fn jwt_parts<T: DeserializeOwned>(
     jwt: &str,
@@ -257,13 +174,7 @@ pub(crate) fn verify_release(
     )?;
     let o = &req.operation;
     Ok(Verified {
-        request: Request {
-            epoch: o.epoch,
-            sequence: o.sequence,
-            not_before: o.not_before,
-            expires: o.expires,
-            now,
-        },
+        request: o.request(now),
         evidence: Evidence {
             owner: true,
             oauth: true,
@@ -289,109 +200,50 @@ pub(crate) fn verify_before_device(
     let g = &req.grant.payload;
     let o = &req.operation;
     let grant_hash = object_hash(&req.grant)?;
-    let expected = vault_policy::Binding {
-        vault: trust.vault,
-        grant: g.id,
-        grant_hash: grant_hash.as_str(),
-        resource: g.resource,
-        version: g.version,
-        record_hash: g.record_hash.as_str(),
-        action: g.action,
-        issue: &g.issue,
-        epoch: g.epoch,
-        instance: g.instance,
-        artifact_hash: g.artifact_hash.as_str(),
-        recipient: g.recipient.as_str(),
-    };
-    let actual = vault_policy::Binding {
-        vault: o.vault,
-        grant: o.grant,
-        grant_hash: o.grant_hash.as_str(),
-        resource: o.resource,
-        version: o.version,
-        record_hash: o.record_hash.as_str(),
-        action: o.action,
-        issue: &o.issue,
-        epoch: o.epoch,
-        instance: o.instance,
-        artifact_hash: o.artifact_hash.as_str(),
-        recipient: o.recipient.as_str(),
-    };
     ensure!(
-        vault_policy::bindings_match(&expected, &actual),
+        vault_policy::wire::operation_matches_grant(g, o, &trust.vault, &grant_hash),
         "grant/resource/action/execution binding"
     );
     ensure!(
-        vault_policy::request_period(
-            g.not_before,
-            g.expires,
-            o.not_before,
-            o.expires,
-            now,
-            MAX_REQUEST_LIFETIME
-        ),
+        vault_policy::wire::operation_current(g, o, now, MAX_REQUEST_LIFETIME),
         "grant time binding and request lifetime"
     );
-    ensure!(o.not_before <= now && now < o.expires, "request expired");
     fixed::<32>(&o.nonce)?;
     ensure!(
-        object_hash(record)? == g.record_hash
-            && record.context.vault == g.vault
-            && record.context.resource == g.resource
-            && record.context.version == g.version,
+        vault_policy::wire::record_matches_grant(g, &record.context, &object_hash(record)?),
         "record binding"
     );
+    let at = verified_access_claims(trust, &req.access_token)?;
     ensure!(
-        o.access_token_hash == digest(req.access_token.as_bytes()),
-        "token binding"
+        vault_policy::wire::oauth_matches_grant(trust, g, o, &at, now),
+        "OAuth binding, scope or expiry"
     );
-    let (at, _): (AccessClaims, _) =
-        jwt_parts(&req.access_token, "at+jwt", Some(&trust.issuer_public_key))?;
-    ensure!(
-        at.iss == trust.issuer
-            && at.aud == trust.audience
-            && at.sub == g.subject
-            && at.grant_id == g.id,
-        "OAuth binding"
-    );
-    ensure!(
-        at.nbf <= now && now < at.exp && o.expires <= at.exp,
-        "OAuth expired"
-    );
-    let scope = match g.action {
-        Action::Read => "secret:read",
-        Action::Issue => "secret:issue",
-    };
-    ensure!(at.scope.split(' ').any(|s| s == scope), "OAuth scope");
     let (dpop, jwk): (DpopClaims, _) = jwt_parts(&req.dpop, "dpop+jwt", None)?;
     let jwk = jwk.context("missing JWK")?;
-    ensure!(
-        at.cnf.jkt == jwk.thumbprint()? && at.cnf.jkt == g.dpop_thumbprint,
-        "DPoP key binding"
-    );
-    ensure!(
-        jwk.verifying_key()? != parse_public(&g.device_public_key)?
-            && jwk.verifying_key()? != parse_public(&g.guardian_public_key)?,
-        "independent keys required"
-    );
     let endpoint = match o.action {
         Action::Read => "release",
         Action::Issue => "issue",
     };
+    let proof = vault_policy::wire::ProofContext {
+        actual_key: &jwk.verifying_key()?,
+        device_key: &parse_public(&g.device_public_key)?,
+        guardian_key: &parse_public(&g.guardian_public_key)?,
+        thumbprint: &jwk.thumbprint()?,
+        method: &"POST".to_owned(),
+        target: &format!("{}/v1/{endpoint}", trust.audience),
+        token_hash: &digest(req.access_token.as_bytes()),
+    };
     ensure!(
-        dpop.htm == "POST" && dpop.htu == format!("{}/v1/{endpoint}", trust.audience),
-        "DPoP target"
-    );
-    ensure!(
-        dpop.ath == digest(req.access_token.as_bytes()) && dpop.nonce == o.nonce,
-        "DPoP token/nonce"
-    );
-    ensure!(
-        dpop.iat <= now
-            && now - dpop.iat <= MAX_REQUEST_LIFETIME
-            && !dpop.jti.is_empty()
-            && dpop.jti.len() <= 128,
-        "DPoP freshness"
+        vault_policy::wire::dpop_matches_request(
+            g,
+            o,
+            &at,
+            &dpop,
+            &proof,
+            now,
+            MAX_REQUEST_LIFETIME
+        ),
+        "DPoP binding or freshness"
     );
     verify(
         "guardian-operation",
@@ -402,4 +254,9 @@ pub(crate) fn verify_before_device(
         &g.guardian_public_key,
     )?;
     Ok(())
+}
+
+/// The broker uses the same pinned issuer verification before calculating expiry.
+pub(crate) fn verified_access_claims(trust: &Trust, token: &str) -> Result<AccessClaims> {
+    Ok(jwt_parts(token, "at+jwt", Some(&trust.issuer_public_key))?.0)
 }

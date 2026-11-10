@@ -10,6 +10,126 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[derive(Clone, Serialize)]
+struct InputPin {
+    role: String,
+    path: PathBuf,
+    sha256: String,
+}
+/// Immutable measurements of the bytes checked against deployment acceptance.
+/// Includes the DB key envelope, never the mutable SQLCipher database pages.
+pub struct ConfigurationSnapshot {
+    bytes: Vec<u8>,
+    digest: String,
+    pins: Vec<InputPin>,
+}
+impl ConfigurationSnapshot {
+    pub fn read(path: &Path) -> Result<Self> {
+        Self::capture(path, true)
+    }
+    fn capture(path: &Path, protected: bool) -> Result<Self> {
+        if protected {
+            crate::runner::protected_path(path)?;
+        }
+        let bytes = crate::runner::read_bounded(path, 1024 * 1024)?;
+        let config: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let mut pins = Vec::new();
+        fn walk(
+            v: &serde_json::Value,
+            role: &str,
+            protected: bool,
+            pins: &mut Vec<InputPin>,
+        ) -> Result<()> {
+            match v {
+                serde_json::Value::Object(fields) => {
+                    for (key, value) in fields {
+                        let label = format!("{role}/{}", key.replace('~', "~0").replace('/', "~1"));
+                        if let Some(name) = value.as_str() {
+                            if matches!(
+                                key.as_str(),
+                                "certificate"
+                                    | "tls_key"
+                                    | "ca"
+                                    | "witness_ca"
+                                    | "allocator_ca"
+                                    | "helper"
+                                    | "envelope"
+                                    | "connection_envelope"
+                                    | "record"
+                                    | "bundle"
+                                    | "module"
+                                    | "path"
+                                    | "database"
+                            ) {
+                                let path = if key == "database" {
+                                    PathBuf::from(format!("{name}.key-envelope.json"))
+                                } else {
+                                    PathBuf::from(name)
+                                };
+                                ensure!(
+                                    path.is_absolute() && path.canonicalize()? == path,
+                                    "deployment input must be a canonical absolute path"
+                                );
+                                if protected {
+                                    crate::runner::protected_path(&path)?;
+                                }
+                                let data = crate::runner::read_bounded(&path, 64 * 1024 * 1024)?;
+                                pins.push(InputPin {
+                                    role: label.clone(),
+                                    path,
+                                    sha256: sha(&data),
+                                });
+                            }
+                        }
+                        walk(value, &label, protected, pins)?;
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for (i, value) in values.iter().enumerate() {
+                        walk(value, &format!("{role}/{i}"), protected, pins)?;
+                    }
+                }
+                _ => (),
+            }
+            Ok(())
+        }
+        walk(&config, "", protected, &mut pins)?;
+        pins.sort_by(|a, b| a.role.cmp(&b.role));
+        let digest = sha(&serde_json::to_vec(&(
+            "vault-rs/deployment-inputs/v2",
+            sha(&bytes),
+            &pins,
+        ))?);
+        Ok(Self {
+            bytes,
+            digest,
+            pins,
+        })
+    }
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+    pub fn database_generation(&self, database: &Path) -> Result<&str> {
+        let mut path = database.as_os_str().to_os_string();
+        path.push(".key-envelope.json");
+        self.pins
+            .iter()
+            .find(|p| p.path == Path::new(&path) && p.role.ends_with("/database"))
+            .map(|p| p.sha256.as_str())
+            .ok_or_else(|| {
+                anyhow::anyhow!("database generation was not covered by deployment acceptance")
+            })
+    }
+}
+
+pub struct VerifiedDeployment {
+    pub deadline: u64,
+    pub configuration: ConfigurationSnapshot,
+}
+
 pub const SOURCE_SHA256: &str = env!("VAULT_SOURCE_SHA256");
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -269,6 +389,9 @@ pub fn verify_acceptance(
 }
 
 pub fn observe(config: &Path) -> Result<Observed> {
+    observe_snapshot(&ConfigurationSnapshot::read(config)?)
+}
+fn observe_snapshot(config: &ConfigurationSnapshot) -> Result<Observed> {
     #[cfg(target_os = "linux")]
     let (platform, host) = (
         Platform::Linux,
@@ -301,7 +424,7 @@ pub fn observe(config: &Path) -> Result<Observed> {
             &std::env::current_exe()?,
             128 * 1024 * 1024,
         )?),
-        config_sha256: sha(&crate::runner::read_bounded(config, 1024 * 1024)?),
+        config_sha256: config.digest.clone(),
         host_sha256: sha(&host),
         platform,
         now: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
@@ -316,6 +439,9 @@ pub struct AcceptanceFiles {
     pub logs: PathBuf,
 }
 pub fn check_files(files: &AcceptanceFiles, config: &Path) -> Result<u64> {
+    Ok(check_configuration(files, config)?.deadline)
+}
+pub fn check_configuration(files: &AcceptanceFiles, config: &Path) -> Result<VerifiedDeployment> {
     crate::runner::protected_path(&files.policy)?;
     crate::runner::protected_path(config)?;
     let policy: AuthorityPolicy =
@@ -324,13 +450,23 @@ pub fn check_files(files: &AcceptanceFiles, config: &Path) -> Result<u64> {
         &files.bundle,
         2 * 1024 * 1024,
     )?)?;
-    verify_acceptance(&policy, &bundle, &observe(config)?, &files.logs)?;
-    Ok(bundle
+    let configuration = ConfigurationSnapshot::read(config)?;
+    verify_acceptance(
+        &policy,
+        &bundle,
+        &observe_snapshot(&configuration)?,
+        &files.logs,
+    )?;
+    let deadline = bundle
         .release
         .payload
         .expires
         .min(bundle.review.payload.expires)
-        .min(bundle.deployment.payload.expires))
+        .min(bundle.deployment.payload.expires);
+    Ok(VerifiedDeployment {
+        deadline,
+        configuration,
+    })
 }
 pub fn report(files: Option<&AcceptanceFiles>, config: Option<&Path>) -> Report {
     let result = match (files, config) {
@@ -513,6 +649,54 @@ mod tests {
             )
             .unwrap();
         }
+    }
+    #[test]
+    fn transitive_inputs_and_database_generation_are_bound_to_acceptance() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let database = root.join("vault.db");
+        let envelope = root.join("vault.db.key-envelope.json");
+        let helper = root.join("helper");
+        let ca = root.join("ca");
+        let module = root.join("extension.wasm");
+        let config = root.join("config.json");
+        for path in [&database, &envelope, &helper, &ca, &module] {
+            std::fs::write(path, b"initial").unwrap();
+        }
+        std::fs::write(
+            &config,
+            serde_json::to_vec(&serde_json::json!({
+                "database": database, "backend": {"helper": helper}, "ca": ca,
+                "extension": {"module": module}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let original = ConfigurationSnapshot::capture(&config, false).unwrap();
+        assert_eq!(
+            original.database_generation(&database).unwrap(),
+            sha(b"initial")
+        );
+        assert_eq!(original.bytes(), std::fs::read(&config).unwrap());
+        for path in [&envelope, &helper, &ca, &module] {
+            std::fs::write(path, b"replacement").unwrap();
+            assert_ne!(
+                original.digest(),
+                ConfigurationSnapshot::capture(&config, false)
+                    .unwrap()
+                    .digest()
+            );
+            std::fs::write(path, b"initial").unwrap();
+        }
+        std::fs::write(&database, b"normal mutable SQLCipher page").unwrap();
+        assert_eq!(
+            original.digest(),
+            ConfigurationSnapshot::capture(&config, false)
+                .unwrap()
+                .digest()
+        );
+        std::fs::remove_file(&envelope).unwrap();
+        assert!(ConfigurationSnapshot::capture(&config, false).is_err());
     }
     #[test]
     fn acceptance_positive_validator_fixture() {

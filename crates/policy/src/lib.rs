@@ -1,6 +1,7 @@
 //! The executable reference monitor. No IO, allocations, crypto, clocks, or unsafe.
 //! Evidence booleans MUST be supplied by trusted verification, never by a caller.
 #![no_std]
+pub mod wire;
 
 /// An abstract refinement boundary: each flag is produced by protocol verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +19,7 @@ pub struct Evidence {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
+#[cfg_attr(feature = "wire", derive(serde::Serialize, serde::Deserialize))]
 pub struct State {
     pub epoch: u64,
     pub next: u64,
@@ -154,43 +156,6 @@ pub fn retired() -> State {
     }
 }
 
-/// Fields that must match the owner grant before a device or gate may approve.
-/// Production instantiates this with UUIDs, strings, Action, and IssueSpec;
-/// their equality and conversion from parsed JSON remain explicit assumptions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(kani, derive(kani::Arbitrary))]
-pub struct Binding<I, D, A, Q> {
-    pub vault: I,
-    pub grant: I,
-    pub grant_hash: D,
-    pub resource: I,
-    pub version: u64,
-    pub record_hash: D,
-    pub action: A,
-    pub issue: Q,
-    pub epoch: u64,
-    pub instance: I,
-    pub artifact_hash: D,
-    pub recipient: D,
-}
-pub fn bindings_match<I: Eq, D: Eq, A: Eq, Q: Eq>(
-    a: &Binding<I, D, A, Q>,
-    b: &Binding<I, D, A, Q>,
-) -> bool {
-    a.vault == b.vault
-        && a.grant == b.grant
-        && a.grant_hash == b.grant_hash
-        && a.resource == b.resource
-        && a.version == b.version
-        && a.record_hash == b.record_hash
-        && a.action == b.action
-        && a.issue == b.issue
-        && a.epoch == b.epoch
-        && a.instance == b.instance
-        && a.artifact_hash == b.artifact_hash
-        && a.recipient == b.recipient
-}
-
 /// One byte of a 2-of-2 secret split. The caller must supply an independent,
 /// uniformly random mask. This exact implementation is also used by crypto.rs.
 pub fn mask_byte(secret: u8, mask: u8) -> u8 {
@@ -198,6 +163,18 @@ pub fn mask_byte(secret: u8, mask: u8) -> u8 {
 }
 pub fn join_byte(first: u8, second: u8) -> u8 {
     first ^ second
+}
+
+/// The exact 32-byte loops used by HPKE/AEAD adapters, including their indexing.
+pub fn split32(secret: &[u8; 32], mask: &[u8; 32], output: &mut [u8; 32]) {
+    for i in 0..32 {
+        output[i] = mask_byte(secret[i], mask[i]);
+    }
+}
+pub fn join32(first: &[u8; 32], second: &[u8; 32], output: &mut [u8; 32]) {
+    for i in 0..32 {
+        output[i] = join_byte(first[i], second[i]);
+    }
 }
 
 /// UID allocation is a monotonic witness revision, not a reusable process slot.
@@ -275,6 +252,22 @@ mod proofs {
     use super::*;
 
     #[kani::proof]
+    #[kani::unwind(33)]
+    fn actual_32_byte_shares_restore_and_allow_any_candidate() {
+        let secret: [u8; 32] = kani::any();
+        let mask: [u8; 32] = kani::any();
+        let candidate: [u8; 32] = kani::any();
+        let mut share = [0; 32];
+        let mut plain = [0; 32];
+        split32(&secret, &mask, &mut share);
+        join32(&mask, &share, &mut plain);
+        assert_eq!(plain, secret);
+        split32(&candidate, &mask, &mut share);
+        join32(&mask, &share, &mut plain);
+        assert_eq!(plain, candidate);
+    }
+
+    #[kani::proof]
     fn physical_exclusion_cannot_waive_other_requirements() {
         let index: usize = kani::any();
         let methods: u32 = kani::any();
@@ -331,13 +324,6 @@ mod proofs {
             });
         }
         assert_eq!(disclosed.get(), expected);
-    }
-
-    #[kani::proof]
-    fn all_binding_fields_refine_record_equality() {
-        let a: Binding<u128, u128, u8, u128> = kani::any();
-        let b = kani::any();
-        assert_eq!(bindings_match(&a, &b), a == b);
     }
 
     #[kani::proof]
