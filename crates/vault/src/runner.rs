@@ -527,74 +527,27 @@ mod tests {
             println!("PASS: extended ACL bypass is refused even with root-owned 0600 mode");
         }
         use std::os::fd::AsRawFd;
-        let script = format!(
-            r#"#!/usr/bin/python3
-import os,sys,ctypes
-assert os.getuid()>=10000 and os.getgid()==os.getuid()
-assert all(g==os.getuid() for g in os.getgroups())
-assert 'VAULT_PARENT_ONLY' not in os.environ and 'LD_PRELOAD' not in os.environ
-for path in ['/opt/vault-isolation/private/key','/proc/{}/mem','/proc/{}/fd/{}']:
-    try:
-        open(path,'rb').read(1)
-        raise AssertionError('broker key/memory/FD readable')
-    except PermissionError: pass
-    except FileNotFoundError:
-        assert sys.platform=='darwin' and path.startswith('/proc/')
-if sys.platform=='darwin':
-    lib=ctypes.CDLL('/usr/lib/libSystem.B.dylib')
-    task=ctypes.c_uint.in_dll(lib,'mach_task_self_').value
-    port=ctypes.c_uint()
-    assert lib.task_for_pid(task,{broker_pid},ctypes.byref(port))!=0
-try:
-    os.setuid(0)
-    raise AssertionError('privilege escalation')
-except PermissionError: pass
-assert sys.stdin.buffer.read()==b'SYNTHETIC AUTHORIZED SECRET'
-print('PASS: native worker received only the authorized plaintext; keys/memory/FDs denied')
-"#,
-            std::process::id(),
-            std::process::id(),
-            private_fd.as_raw_fd(),
-            broker_pid = std::process::id()
-        );
+        let fixture = PathBuf::from("/opt/isolation-fixture");
         let bundle = Bundle {
-            entrypoint: "main.py".into(),
-            arguments: vec![],
+            entrypoint: "probe".into(),
+            arguments: vec![
+                "worker".into(),
+                std::process::id().to_string(),
+                private_fd.as_raw_fd().to_string(),
+            ],
             files: vec![BundleFile {
-                path: "main.py".into(),
-                contents: encode(script.as_bytes()),
+                path: "probe".into(),
+                contents: encode(&fs::read(&fixture).unwrap()),
                 executable: true,
             }],
         };
         let staged = bundle.stage(&base).unwrap();
-        let attack = format!(
-            r#"import os,subprocess,sys,ctypes
-print('PROBE: isolated AI interpreter entered', flush=True)
-assert os.getuid()==1000
-for path in ['/opt/vault-isolation/private/key','/proc/{}/mem','{}/main.py']:
-    try:
-        open(path,'wb' if path.endswith('main.py') else 'rb')
-        raise AssertionError('AI access accepted')
-    except PermissionError: pass
-    except FileNotFoundError:
-        assert sys.platform=='darwin' and path.startswith('/proc/')
-if sys.platform=='darwin':
-    lib=ctypes.CDLL('/usr/lib/libSystem.B.dylib')
-    task=ctypes.c_uint.in_dll(lib,'mach_task_self_').value
-    port=ctypes.c_uint()
-    assert lib.task_for_pid(task,{broker_pid},ctypes.byref(port))!=0
-print('PROBE: direct broker invocation from AI identity', flush=True)
-r=subprocess.run(['{}','broker','--config','/opt/vault-isolation/private/key','--verification-run'],capture_output=True, timeout=15)
-assert r.returncode!=0
-print('PASS: separate AI UID cannot read broker state, modify measured code, or invoke broker')
-"#,
-            std::process::id(),
-            staged.directory.display(),
-            executable.display(),
-            broker_pid = std::process::id()
-        );
-        assert!(Command::new("/usr/bin/python3")
-            .args(["-c", &attack])
+        println!("PROBE: measured native bundle staged");
+        assert!(Command::new(&fixture)
+            .arg("ai")
+            .arg(std::process::id().to_string())
+            .arg(staged.directory.join("probe"))
+            .arg(&executable)
             .current_dir(&base)
             .uid(1000)
             .gid(1000)
@@ -623,11 +576,11 @@ print('PASS: separate AI UID cannot read broker state, modify measured code, or 
         let second = allocate_worker(&witness, namespace, 10000, 20000, 1000).unwrap();
         assert!(second.uid > first_uid);
         let sleeper = Bundle {
-            entrypoint: "hang.py".into(),
-            arguments: vec![],
+            entrypoint: "probe".into(),
+            arguments: vec!["spin".into()],
             files: vec![BundleFile {
-                path: "hang.py".into(),
-                contents: encode(b"#!/usr/bin/python3\nwhile True: pass\n"),
+                path: "probe".into(),
+                contents: encode(&fs::read(&fixture).unwrap()),
                 executable: true,
             }],
         }

@@ -23,7 +23,8 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev openjdk-21-jre-headless
       - run: python3 scripts/restore-vendor.py
       - run: bash scripts/prepare-tools.sh
-      - run: python3 scripts/verify.py --with-docker
+      - run: python3 scripts/verify.py --with-docker --output evidence/runs/linux
+      - run: cp target/release/vault-rs evidence/runs/linux/vault-rs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -56,6 +57,8 @@ jobs:
         run: |
           cargo test --locked -p vault-rs --lib --no-run --message-format=json > /tmp/vault-test-build.jsonl
           test_binary=$(python3 -c 'import json; print(next(v["executable"] for line in open("/tmp/vault-test-build.jsonl") if (v:=json.loads(line)).get("reason")=="compiler-artifact" and v.get("profile",{}).get("test") and v.get("executable")))')
+          cc -O2 -Wall -Wextra -Werror tools/isolation-fixture.c -o /tmp/isolation-fixture
+          sudo install -m 755 /tmp/isolation-fixture /opt/isolation-fixture
           sudo mkdir -p /opt/vault-ci
           sudo install -m 755 target/release/vault-rs /opt/vault-ci/vault-rs
           sudo install -m 755 "$test_binary" /opt/vault-ci/vault-tests
@@ -80,3 +83,27 @@ jobs:
           name: macos-software-evidence
           path: evidence/macos/
       # These are actual macOS software tests; physical SE presence is excluded.
+  release-evidence:
+    needs: [linux, macos-software-verification]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: python3 scripts/restore-vendor.py
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: linux-evidence
+          path: evidence/ci-linux
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: macos-software-evidence
+          path: evidence/ci-macos
+      - name: Evaluate identical sources and package verified software
+        run: python3 scripts/package-release.py --linux evidence/ci-linux/linux --macos evidence/ci-macos --output evidence/release-bundle
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: production-software-release
+          path: evidence/release-bundle/
+          if-no-files-found: error

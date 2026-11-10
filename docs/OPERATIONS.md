@@ -75,3 +75,11 @@ initialize-storageは既存DB／鍵envelopeを上書きせず、新しい暗号�
 以後、署名付きrelease/review/deploymentとauthority policyを登録し、readinessが成功した構成だけをserve/witness/brokerの `--acceptance` に渡します。releaseの配布物検証が完了していても、自分の配置を誰かが承認したことにはなりません。必要な署名は登録した実際の権限主体が `approve` コマンドで行います。
 
 稼働中の受入済みhelper・CA・provider config等の上書きは禁止です。更新は停止→新世代pathへの配置→observe→再承認→起動の順で行います。rootの悪意ある変更はこの保証の外ですが、誤った同時更新も避けます。token期限が30秒より短い場合もoperation期限をtokenに合わせ、device操作中に期限が過ぎればworkloadへ値を渡しません。
+
+## 検証済み配布物の取得
+
+同一 GitHub Actions run の `production-software-release` artifact に、Linux/macOS の native binary、Mac helper、全検証ログ、ソース、`release.json`、`SHA256SUMS` をまとめます。`release-evidence` job は両 OS の job 成功後だけ実行し、ソース全ファイルと binary/log hash の一致を検査します。失敗した run の中間 artifact は製品の受入証跡に使いません。workflow の commit と出所も確認してください。hash 単独では配布者を認証できません。
+
+Linux 配布 binary は Ubuntu 24.04 x86_64（glibc 2.39、OpenSSL 3）向けです。Mac 配布 binary は macOS 15 arm64、Homebrew OpenSSL 3 (`brew install openssl@3`) を使います。他の OS version／architecture は同じソースから再 build・再検証してください。artifact 展開後は `sha256sum -c SHA256SUMS`（Mac は `shasum -a 256 -c SHA256SUMS`）で内容を検査し、対象 binary を root 管理 path へ `install -m 755` で配置します。macOS helper は専用ユーザーの Keychain と署名・entitlement 設定が別途必要です（HARDWARE.md）。
+
+source.tar.gz は検証対象ソース一式です。Rust toolchain は rust-toolchain.toml、crate は Cargo.lock、CI action は commit SHA に固定しています。ソースを展開して git repository を初期化し、`scripts/prepare-tools.sh` と `scripts/verify.py --with-docker` で Linux 証跡を再生成できます。Mac は workflow の native 手順を実行します。再生成は新しい証跡となり、元の承認署名を引き継ぎません。

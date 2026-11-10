@@ -227,13 +227,13 @@ fn real_cli_services_broker_two_users_restart_and_revocation() {
     .unwrap();
     let rp = root.join("record.json");
     write(&rp, &record);
-    let workload = b"#!/usr/bin/python3\nimport os,sys\nassert os.getuid()>=10000\nassert os.getgid()==os.getuid() and all(g==os.getuid() for g in os.getgroups())\nassert sys.stdin.buffer.read()==b'SYNTHETIC AUTHORIZED SECRET'\nassert 'VAULT_PARENT_ONLY' not in os.environ\nprint('WORKLOAD_OK')\n";
+    let workload = fs::read("/opt/isolation-fixture").unwrap();
     let bundle = Bundle {
-        entrypoint: "main.py".into(),
-        arguments: vec![],
+        entrypoint: "probe".into(),
+        arguments: vec!["deployment".into()],
         files: vec![BundleFile {
-            path: "main.py".into(),
-            contents: encode(workload),
+            path: "probe".into(),
+            contents: encode(&workload),
             executable: true,
         }],
     };

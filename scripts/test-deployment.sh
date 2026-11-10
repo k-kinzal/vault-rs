@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p .tools
+cc -O2 -Wall -Wextra -Werror tools/isolation-fixture.c -o .tools/isolation-fixture
 cargo build --locked -p vault-rs --all-features
 cargo build --locked -p vault-rs --all-features --release --example deployment_fixture
 cargo test --locked -p vault-rs --test deployment --no-run --message-format=json > .tools/deployment-artifacts.jsonl
@@ -17,7 +18,8 @@ test -n "$task_test_binary"
 docker run --rm --network none \
   -e VAULT_TEST_RUNNER_BIN=/opt/vault-rs \
   -v "$PWD/target/debug/vault-rs:/test-input/vault-rs:ro" \
+  -v "$PWD/.tools/isolation-fixture:/test-input/isolation-fixture:ro" \
   -v "$task_test_binary:/test-input/deployment-tests:ro" \
   -v "$PWD/target/release/examples/deployment_fixture:/test-input/helper:ro" \
   vault-rs-tpm-simulation \
-  bash -c 'install -m 755 /test-input/vault-rs /opt/vault-rs && install -m 755 /test-input/helper /opt/deployment-test-helper && exec /test-input/deployment-tests --ignored --nocapture --test-threads=1'
+  bash -c 'install -m 755 /test-input/isolation-fixture /opt/isolation-fixture && install -m 755 /test-input/vault-rs /opt/vault-rs && install -m 755 /test-input/helper /opt/deployment-test-helper && exec /test-input/deployment-tests --ignored --nocapture --test-threads=1'
