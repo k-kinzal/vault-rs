@@ -8,7 +8,7 @@
 - `authorize_and_commit` は認可後だけpersistを呼び、その成功後だけ `Committed<T>` を返します。`ordered_commit` はwitness成功後だけDB commitを呼びます。任意のstate・request・証拠・両永続処理の成功／失敗に対し、開示可能性、実行順、回数が宣言的仕様に一致します。常に拒否するだけの変更も検出します。
 - Grant/Operation/Challenge/Trust/RecordContext/AccessClaims/DpopClaimsは実サービスと証明で型定義を共有します。owner、record、challenge、実行物・受信鍵・instance、OAuth subject/audience/grant/scope/期限、DPoP key/nonce/target/method/token hash/時刻を実fieldから直接比較します。手動で作ったBindingへの変換を仮定しません。
 - `Operation::request` は実際のepoch/sequence/not_before/expires/nowを直接検証します。DB LedgerはpolicyのStateをそのまま持ち、返されたState全体を保存します。
-- ScopeSetは256 byte以内のRFC6749 ASCII scope文法を解釈し、認識する完全なtokenだけに権限を与えます。grammar/read/issueを独立したtrie仕様と比較し、256 byte全域の任意入力と全長を扱います。未知scopeは権限を与えません。
+- ScopeSetは256 byte以内のRFC6749 ASCII scope文法を解釈し、認識する完全なtokenだけに権限を与えます。実step/finishを独立したtrie仕様と比較し、初期・全byteに対する状態保存／同時拒否・終了の3補題を機械検証します。逐次foldと拒否伝播の構造帰納法で任意有限入力、従って256 byte全域を扱います。全ループを別々に展開して比較したKani runの成功とは記録しません。対応と帰納法はSCOPE_PROOF.mdに記載します。未知scopeは権限を与えません。
 - 要求期限はgrant・challenge・実際の署名済みaccess token・最大30秒の最小値。device unwrap後とworkload起動直前にも現在時刻で確認します。
 - 実32 byteの `split32` / `join32` の索引を含む全処理について復元性と任意候補秘密との両立を確認します。乱数の一様性や暗号方式そのものの安全性はこの代数の結論ではありません。
 - UID割当、永久廃止、時間区間のoverflow、受入method完全性、G04/G05だけの物理試験除外を検証します。
@@ -28,7 +28,7 @@ TypeOK、NoUnauthorizedRelease、NoReplay、BoundedRelease、CommitBeforeDisclos
 ## 原始機能の契約
 
 1. 登録した鍵に対する署名の偽造困難性、HPKE/AEADの機密性と完全性、hashの衝突困難性、独立で予測できない乱数。
-2. parserが指定形式のfield意味を保存すること。SQLCipher暗号とメモリ処理、SQLiteのatomic/durable/serialized transaction、PostgreSQLの権限とtransaction契約。
+2. parserが指定形式のfield意味を保存すること、Rust標準iteratorと制御フローが逐次foldと拒否伝播の意味を保存すること。SQLCipher暗号とメモリ処理、SQLiteのatomic/durable/serialized transaction、PostgreSQLの権限とtransaction契約。
 3. witness CASが線形化可能で、Vault DBとは独立に永続化され、攻撃者が両者を同時に巻き戻せないこと。
 4. OSのUID/FD/process/memory/ACL/ファイル保護、native helperと鍵登録、信頼できる新しい時計。root、OS kernel、必要な承認domainの全てが攻撃者に支配されていないこと。
 5. 管理者は受入済みのhelper・provider設定・CA・extension等を稼働中に上書きしないこと。更新はサービスを停止し、新しい世代のpath・設定を測定し再承認してから行います。DB envelopeはこれに加え、受入時のdigestを実際に読むbyte列に照合してからunwrapします。

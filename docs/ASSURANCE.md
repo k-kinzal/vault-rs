@@ -22,7 +22,7 @@
 
 ## 形式検証
 
-Kaniは製品と同じno_std policyコードをRustの全scalar bit幅で検証します。wire field比較、OAuth/DPoP、challenge、execution、実Request変換、State遷移、永続順序、UID/失効/期間、証跡methodと物理除外、32byte share処理を含みます。scope文法は実装の入力上限256 byte全域です。harness数と成否の正本は `commands/kani.log` です。署名関数やserde/OpenSSL/OSをKaniに渡した証明ではありません。
+Kaniは製品と同じno_std policyコードをRustの全scalar bit幅で検証します。wire field比較、OAuth/DPoP、challenge、execution、実Request変換、State遷移、永続順序、UID/失効/期間、証跡methodと物理除外、32byte share処理を含みます。scope文法は実step/finishの初期・遷移・終了の機械検証と構造帰納法によって256 byte全域を含む有限入力を扱います。foldの対応はRust iterator/control-flow semanticsに基づき、別々に展開した全ループのKani成功とは区別します（SCOPE_PROOF.md）。harness数と成否の正本は `commands/kani.log` です。署名関数やserde/OpenSSL/OSをKaniに渡した証明ではありません。
 
 TLCのbaselineは一つのgrant、4 request identities、budget/challenge/admin/provider attempts各2の有限探索です。拡張モデルのレビュー時探索は1,587,137 distinct states、9,465,906 generated、depth 33でした。再実行ログを正本とし、fingerprint衝突評価も残します。6防御の削除は指定不変条件の反例を必須とし、3到達性試験で正規release・同一issue再送・admin crash後quarantineを確認します。
 

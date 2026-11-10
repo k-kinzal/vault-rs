@@ -3,7 +3,7 @@
 import argparse, pathlib, subprocess, tempfile, json
 root=pathlib.Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser();p.add_argument("--output",type=pathlib.Path,required=True);a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
-sources={name:(root/"crates/policy/src"/name).read_text() for name in ("lib.rs","wire.rs")}
+sources={name:(root/"crates/policy/src"/name).read_text() for name in ("lib.rs","wire.rs","scope.rs")}
 mutations=[("missing-guardian","&& e.guardian","&& true","stolen_token_and_dpop_key_are_insufficient"),("missing-sequence","if s.next != r.sequence","if false","replay_after_commit_is_rejected"),("missing-recipient","&& o.recipient == g.recipient","&& true","actual_wire_mapping_refines_owner_binding")]
 mutations.append(("missing-witness-order", "    reserve()?;\n    database()", "    let _ = reserve;\n    database()", "implementation_transaction_refines_atomic_disclosure_spec"))
 mutations.append(("deny-every-operation", "let value = persist(next).map_err(CommitError::Storage)?;", "if true { return Err(CommitError::Policy(Denied::Locked)); } let value = persist(next).map_err(CommitError::Storage)?;", "implementation_transaction_refines_atomic_disclosure_spec"))
@@ -15,6 +15,7 @@ mutations += [
  ("missing-oauth-subject","&& token.sub == grant.subject","&& true","oauth_claims_refine_scope_subject_audience_and_lifetime"),
  ("missing-oauth-expiry","&& now < token.exp","&& true","oauth_claims_refine_scope_subject_audience_and_lifetime"),
  ("missing-dpop-nonce","&& proof.nonce == operation.nonce","&& true","dpop_refines_all_bindings_and_freshness")]
+mutations.append(("missing-scope-issue", "self.mask |= 2;", "self.mask |= 0;", "step_preserves_relation_and_error_equivalence"))
 results=[]
 for name,needle,replacement,harness in mutations:
     matches=[name for name,text in sources.items() if needle in text]

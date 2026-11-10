@@ -209,47 +209,7 @@ pub fn execution_matches<I: Eq, D: Eq, Q>(g: &Grant<I, D, Q>, e: &Execution<'_, 
 pub struct ScopeSet(u8);
 impl ScopeSet {
     pub fn parse(bytes: &[u8]) -> Option<Self> {
-        if bytes.is_empty() || bytes.len() > 256 {
-            return None;
-        }
-        let mut mask = 0;
-        let mut length = 0u8;
-        let mut read = true;
-        let mut issue = true;
-        for &b in bytes {
-            if b == b' ' {
-                if length == 0 {
-                    return None;
-                }
-                if read && length == 11 {
-                    mask |= 1;
-                }
-                if issue && length == 12 {
-                    mask |= 2;
-                }
-                length = 0;
-                read = true;
-                issue = true;
-            } else {
-                if !(b == 0x21 || (0x23..=0x5b).contains(&b) || (0x5d..=0x7e).contains(&b)) {
-                    return None;
-                }
-                read = read && b"secret:read".get(usize::from(length)) == Some(&b);
-                issue = issue && b"secret:issue".get(usize::from(length)) == Some(&b);
-                // Beyond 12 bytes neither recognized scope can match.
-                length = length.saturating_add(1).min(13);
-            }
-        }
-        if length == 0 {
-            return None;
-        }
-        if read && length == 11 {
-            mask |= 1;
-        }
-        if issue && length == 12 {
-            mask |= 2;
-        }
-        Some(Self(mask))
+        crate::scope::parse(bytes).map(Self)
     }
     pub fn allows(self, action: Action) -> bool {
         self.0
@@ -426,93 +386,6 @@ mod proofs {
             ] == values
         );
     }
-    // Independent trie recognizer: scalar prefix states, not the production
-    // parser's two arrays/length/prefix booleans. All 256 bytes remain symbolic.
-    fn scope_reference(bytes: &[u8]) -> Option<u8> {
-        let mut state = 0u8;
-        let mut mask = 0;
-        for &b in bytes {
-            if b == 32 {
-                if state == 0 {
-                    return None;
-                }
-                if state == 11 {
-                    mask |= 1;
-                }
-                if state == 16 {
-                    mask |= 2;
-                }
-                state = 0;
-            } else {
-                if !(b == 33 || (35..=91).contains(&b) || (93..=126).contains(&b)) {
-                    return None;
-                }
-                state = match (state, b) {
-                    (0, b's') => 1,
-                    (1, b'e') => 2,
-                    (2, b'c') => 3,
-                    (3, b'r') => 4,
-                    (4, b'e') => 5,
-                    (5, b't') => 6,
-                    (6, b':') => 7,
-                    (7, b'r') => 8,
-                    (8, b'e') => 9,
-                    (9, b'a') => 10,
-                    (10, b'd') => 11,
-                    (7, b'i') => 12,
-                    (12, b's') => 13,
-                    (13, b's') => 14,
-                    (14, b'u') => 15,
-                    (15, b'e') => 16,
-                    _ => 17,
-                };
-            }
-        }
-        if state == 0 {
-            return None;
-        }
-        if state == 11 {
-            mask |= 1;
-        }
-        if state == 16 {
-            mask |= 2;
-        }
-        Some(mask)
-    }
-    fn scope_equivalence(part: u8) {
-        let input: [u8; 256] = kani::any();
-        let length: u16 = kani::any();
-        kani::assume(length <= 256);
-        let bytes = &input[..length as usize];
-        let expected = scope_reference(bytes);
-        let actual = ScopeSet::parse(bytes);
-        if part == 0 {
-            assert_eq!(actual.is_some(), expected.is_some());
-        }
-        if let (Some(actual), Some(expected)) = (actual, expected) {
-            if part == 1 {
-                assert_eq!(actual.allows(Action::Read), expected & 1 != 0);
-            }
-            if part == 2 {
-                assert_eq!(actual.allows(Action::Issue), expected & 2 != 0);
-            }
-        }
-    }
-    #[kani::proof]
-    #[kani::unwind(258)]
-    fn scope_grammar_matches_whole_token_specification() {
-        scope_equivalence(0);
-    }
-    #[kani::proof]
-    #[kani::unwind(258)]
-    fn scope_read_matches_whole_token_specification() {
-        scope_equivalence(1);
-    }
-    #[kani::proof]
-    #[kani::unwind(258)]
-    fn scope_issue_matches_whole_token_specification() {
-        scope_equivalence(2);
-    }
     #[kani::proof]
     #[kani::unwind(26)]
     fn oauth_claims_refine_scope_subject_audience_and_lifetime() {
@@ -607,5 +480,37 @@ mod proofs {
         if let Some(end) = result {
             assert_eq!(end as u128, spec);
         }
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    #[test]
+    fn exact_scope_tokens_and_full_length_boundary() {
+        for bad in [
+            b"".as_slice(),
+            b" secret:read",
+            b"secret:issue ",
+            b"secret:read  secret:issue",
+            b"secret:read\n",
+            b"secret:read\\",
+            &[0xff],
+            &[b'x'; 257],
+        ] {
+            assert!(ScopeSet::parse(bad).is_none());
+        }
+        let mut full = [b'x'; 256];
+        full[243] = b' ';
+        full[244..].copy_from_slice(b"secret:issue");
+        let parsed = ScopeSet::parse(&full).unwrap();
+        assert!(parsed.allows(Action::Issue));
+        assert!(!parsed.allows(Action::Read));
+        for unknown in [b"secret:read2".as_slice(), b"xsecret:issue", b"other"] {
+            let p = ScopeSet::parse(unknown).unwrap();
+            assert!(!p.allows(Action::Read) && !p.allows(Action::Issue));
+        }
+        let both = ScopeSet::parse(b"secret:issue secret:read").unwrap();
+        assert!(both.allows(Action::Read) && both.allows(Action::Issue));
     }
 }

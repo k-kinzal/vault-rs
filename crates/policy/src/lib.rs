@@ -1,6 +1,7 @@
 //! The executable reference monitor. No IO, allocations, crypto, clocks, or unsafe.
 //! Evidence booleans MUST be supplied by trusted verification, never by a caller.
 #![no_std]
+mod scope;
 pub mod wire;
 
 /// An abstract refinement boundary: each flag is produced by protocol verification.
