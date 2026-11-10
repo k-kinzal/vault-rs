@@ -341,6 +341,7 @@ pub fn launch(
         .uid(identity.uid)
         .gid(identity.uid)
         .process_group(0)
+        .current_dir(&staged.directory)
         .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
@@ -543,7 +544,7 @@ if sys.platform=='darwin':
     lib=ctypes.CDLL('/usr/lib/libSystem.B.dylib')
     task=ctypes.c_uint.in_dll(lib,'mach_task_self_').value
     port=ctypes.c_uint()
-    assert lib.task_for_pid(task,os.getppid(),ctypes.byref(port))!=0
+    assert lib.task_for_pid(task,{broker_pid},ctypes.byref(port))!=0
 try:
     os.setuid(0)
     raise AssertionError('privilege escalation')
@@ -553,7 +554,8 @@ print('PASS: native worker received only the authorized plaintext; keys/memory/F
 "#,
             std::process::id(),
             std::process::id(),
-            private_fd.as_raw_fd()
+            private_fd.as_raw_fd(),
+            broker_pid = std::process::id()
         );
         let bundle = Bundle {
             entrypoint: "main.py".into(),
@@ -567,6 +569,8 @@ print('PASS: native worker received only the authorized plaintext; keys/memory/F
         let staged = bundle.stage(&base).unwrap();
         let attack = format!(
             r#"import os,subprocess,sys,ctypes
+print('PROBE: isolated AI interpreter entered', flush=True)
+assert os.getuid()==1000
 for path in ['/opt/vault-isolation/private/key','/proc/{}/mem','{}/main.py']:
     try:
         open(path,'wb' if path.endswith('main.py') else 'rb')
@@ -578,17 +582,20 @@ if sys.platform=='darwin':
     lib=ctypes.CDLL('/usr/lib/libSystem.B.dylib')
     task=ctypes.c_uint.in_dll(lib,'mach_task_self_').value
     port=ctypes.c_uint()
-    assert lib.task_for_pid(task,os.getppid(),ctypes.byref(port))!=0
-r=subprocess.run(['{}','broker','--config','/opt/vault-isolation/private/key','--verification-run'],capture_output=True)
+    assert lib.task_for_pid(task,{broker_pid},ctypes.byref(port))!=0
+print('PROBE: direct broker invocation from AI identity', flush=True)
+r=subprocess.run(['{}','broker','--config','/opt/vault-isolation/private/key','--verification-run'],capture_output=True, timeout=15)
 assert r.returncode!=0
 print('PASS: separate AI UID cannot read broker state, modify measured code, or invoke broker')
 "#,
             std::process::id(),
             staged.directory.display(),
-            executable.display()
+            executable.display(),
+            broker_pid = std::process::id()
         );
         assert!(Command::new("/usr/bin/python3")
             .args(["-c", &attack])
+            .current_dir(&base)
             .uid(1000)
             .gid(1000)
             .env_clear()

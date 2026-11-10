@@ -118,6 +118,7 @@ impl NativeKey {
             command
         };
         let mut child = command
+            .current_dir("/")
             .env_clear()
             .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
             .stdin(Stdio::piped())
