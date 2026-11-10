@@ -21,6 +21,11 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 fn main() {
+    // Restrict this to the shipped Mach-O executable. Applying it globally to
+    // host proc-macro dylibs prevents rustc from loading those compiler plugins.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-arg-bin=vault-rs=-Wl,-no_uuid");
+    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()

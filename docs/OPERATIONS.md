@@ -86,4 +86,4 @@ source.tar.gz は検証対象ソース一式です。Rust toolchain は rust-too
 
 リリースは `scripts/build-release.sh` に同一のfeature／target選択を集約します。ThinLTOの内部symbol／配置がキャッシュ有無で変わる診断結果に対応し、releaseではLTOを無効化しcodegen-units=1を指定します。性能最適化より同じ条件での全byte再現を優先する設定で、検査は引き続きbinary全体のSHA-256一致を要求します。
 
-Macのrelease linkでは `-no_uuid` を指定し、archive生成時刻は `ZERO_AR_DATE=1` で固定します。認可と証跡にはMach-O UUIDを使わず、実際に実行・配布する全binaryのSHA-256を使います。比較時に識別情報やcode signatureを除外する処理はありません。
+Macの配布用vault-rs実行ファイルだけにbuild.rsから `-no_uuid` を指定し（proc-macro dylib等へは適用せず）、archive生成時刻は `ZERO_AR_DATE=1` で固定します。認可と証跡にはMach-O UUIDを使わず、実際に実行・配布する全binaryのSHA-256を使います。比較時に識別情報やcode signatureを除外する処理はありません。

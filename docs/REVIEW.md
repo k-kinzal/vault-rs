@@ -346,3 +346,8 @@ These values identify source bytes, not binaries or signed attestations.
 - `scripts/check-reproducible.py`: `2d1c09089b64404d791469ace5b742495f657457706390c7973afc714824933f`
 - `.github/workflows/verify.yml`: `104288841ff70ac5c7753c2731c53107bc15ea0a074b13eebe64db9f65b0f57c`
 - `docs/OPERATIONS.md`: `1dfc8d80bab792e3c1c8e6c610320d3b28e859377280a884313041d2ba8f0881`
+
+
+### Parent native-CI follow-up: executable-only linker option
+
+Native run 94eee0f failed at host proc-macro loading when the no-UUID option was applied through global RUSTFLAGS; it did not produce accepted release evidence. The parent restricted that option in crates/vault/build.rs to the vault-rs binary, leaving host compiler plugins untouched, and added an early native executable loader probe. The independent review above remains a source-scoped report, not certification of this later compiler compatibility fix. Fresh same-source native tests and full-byte rebuild equality remain mandatory.

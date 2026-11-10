@@ -39,7 +39,10 @@ jobs:
           persist-credentials: false
       - name: Restore verified sources and record environment
         run: |
-          mkdir -p evidence/macos
+          mkdir -p evidence/macos .tools
+          printf 'int main(void) { return 0; }\n' > .tools/macho-loader-probe.c
+          cc -Wl,-no_uuid .tools/macho-loader-probe.c -o .tools/macho-loader-probe
+          .tools/macho-loader-probe
           python3 scripts/restore-vendor.py
           python3 scripts/release-evidence.py begin-macos --directory evidence/macos
           echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
