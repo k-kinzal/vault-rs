@@ -31,7 +31,7 @@ brokerのstdin/stdoutは管理者が保持するprivate pipeです。端末・FI
 
 承認用native helperは対話式です。witness/operator署名とservice復号にはresident keyを選択でき、起動時だけnative protectorを解錠します。以降のリクエストにはPINを要求しません。`test-deployment.sh`で実CLIの起動・二人の取得・再起動・回数保存を検証します。PINを環境変数／設定へ平文保存しません。30秒の認可期限内に承認が終わらなければ拒否し、新しいOperationを承認します。
 
-Linuxの試験では別UIDによるメモリ／FD／鍵ファイル読取・実行物書換え・broker直接起動を拒否し、正規stdinだけの受渡しを確認します。Linuxにはno_new_privs、core禁止、資源制限を適用します。Mac ARM64のRust／Swiftはクロスビルド済みです。root brokerから専用のGUIユーザーへ`launchctl asuser`とUID変更を行い、Data Protection Keychainを呼ぶ実装です。Mac上のOS隔離／Keychain実行は未実施です。
+Linuxの試験では別UIDによるメモリ／FD／鍵ファイル読取・実行物書換え・broker直接起動を拒否し、正規stdinだけの受渡しを確認します。Linuxにはno_new_privs、core禁止、資源制限を適用します。Mac ARM64のRust／Swiftはクロスビルド済みです。root brokerから専用のGUIユーザーへ`launchctl asuser`とUID変更を行い、Data Protection Keychainを呼ぶ実装です。Mac上のOS隔離はnative CIログで判定します。物理SE／Keychain実機試験は除外です。
 
 timeoutではprocess groupを終了しますが、setsidした子孫全体の終了は保証しません。子孫は再利用されないUIDと既に許可された秘密値しか持ちません。完全なjob lifecycle制御は別の残課題です。
 

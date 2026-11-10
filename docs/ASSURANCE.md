@@ -1,88 +1,49 @@
 # 保証範囲と証跡
 
-**総合ゴールは未達です。`production_ready=false`であり、本番利用を承認できる証拠は揃っていません。** ゴールはPRODUCTION_GOAL.md v2のG01〜G13×Mac/Linuxです。利用者指定で物理鍵実験のみ除外します。
+製品の本番利用判定は `evidence/release.json` の `decision_scope=software_release`、特定配置の判定は実CLI `readiness` の `decision_scope=deployment` です。製品判定にはLinux全試験と実macOS上のソフトウェア試験を、同一sourceに対して必要とします。配置先の署名は自動生成しません。物理鍵実験のみ利用者指定で除外します。
 
-形式検証で保証したのは、明示した前提における一部の実コードと有限モデルです。JSON parser、署名検証、永続化、OS、native helperまで連続したサービス全体のrefinement証明はありません。「考慮漏れが一切ない」「未知の脆弱性がない」とは主張しません。
+## ゴールと証跡の対応
 
-## ゴールへの対応
-
-| ID | 実装・検証 | 未達／保証境界 |
+| ID | 実装・必要証跡 | 保証境界 |
 |---|---|---|
-| G01 | OAuth/DPoP＋device/guardian署名、Kani、盗難鍵・各field改変試験 | parser/crypto→Evidence生成全体の機械検証なし |
-| G02 | root broker、使い捨てUID、private stdin。LinuxでAI UIDからのmemory/FD/file/code/sign経路拒否 | MacのRust/Swiftはクロスビルド済み、専用GUI UIDへ分離。Mac上の実OS隔離／Keychain実行は未検証 |
-| G03 | immutable bundle＋全file/引数hash、private instance/recipient、差替え試験 | system runtimeはTCB。Mac ACL／更新時の実機攻撃試験未実施 |
-| G04 | SE helper、TPM helper/enrollment、外部PKCS#11 optional | 物理デバイス実験は明示除外。swtpm結果を物理証跡にしない |
-| G05 | SQLCipher DB/WAL、hardware-wrapped DB鍵、2-of-2 E2E、鍵なしopen失敗 | protector接続はnative profile／CLI fixtureで確認。物理デバイス実験は除外、swap／物理メモリはTCB境界 |
-| G06 | 実policy Kani、TLC、DB rollback/並行CAS/lost-response fault injection | witness独立運用は仮定。witness同時rollback耐性なし |
-| G07 | 固定AS鍵・issuer/audience/sub/grant/scope/cnf、ES256/DPoP検査 | oidc-providerの実HTTPS code/S256 PKCE/DPoP nonce/consentを確認。組織の本番AS配置は別途必要 |
-| G08 | 単一HTTPS実装、実TLS接続・不正CA拒否、subject/grant分離 | Linux実CLI HTTPS・二人・resident service鍵・restartを確認。Mac上の実行と本番配置は未実施 |
-| G09 | importsなしWasm、fuel/memory制限、実PostgreSQLのrole/TTL/失効試験 | trusted provider/DBはTCB。provider停止中の既存session TTLは未保証 |
-| G10 | owner-quarantine永久廃止、再承認、署名付きrelease/config/hash/epoch/期限検査 | DB新DEK／新generation、設定再ラップ、E2E新鍵/versionを試験。独立witnessを失った場合は旧grant再開不可。Mac運用未実施 |
-| G11 | 製品と同じconsume/bindings/period/UID/retirement/acceptance/secret splitをKani検証 | 実transaction-controllerのrefinementを追加。型変換・crypto・storage・OSを含む全体refinementと独立reviewは未完了 |
-| G12 | 3種署名＋source/binary/config/host/期間＋全条件の検査、負例試験 | 承認者・証跡内容の真実性は信頼仮定。実署名付き受入記録なし |
-| G13 | locked build、依存監査、固定tools/images、source/log digest、clean rebuild比較 | Mac ARM64のRust/Swiftクロスビルドを追加。別組織builder/独立レビュー、Mac実OSでの再現は未実施 |
+| G01 | device/guardian独立署名、共有wire predicateのKani、盗難token/DPoPと各field改変試験 | 署名偽造困難性と登録鍵を信頼 |
+| G02 | Mac/Linux別UIDでmemory/FD/file/IPC/直接broker起動を拒否 | kernel/rootはTCB |
+| G03 | bundle/引数/instance/recipient束縛、変更不可path、Mac ACL拒否 | system runtimeと管理者更新を信頼 |
+| G04 | SE/TPM helper build、swtpm、native profileの誤鍵拒否 | 物理鍵実験は除外。fixtureをhardware証跡にしない |
+| G05 | SQLCipher/WAL、2-of-2 E2E、受入済みDB generation pin、差替え前unwrap拒否 | hardware protector、暗号primitive、swap/物理メモリ保護 |
+| G06 | Kani controller、TLC並行/crash/rollback、実DB commit失敗 | 独立witness CASと非巻き戻し性 |
+| G07 | 実ASのcode/S256 PKCE/DPoP/nonce/subject/期限、共有scope/parser predicate | 本番ASのidentity/consent運用 |
+| G08 | 両OS実CLI HTTPS、二人利用、private stdin、再起動・失効 | 配置先TLS/identity登録 |
+| G09 | Wasm import/FS/network/fuel/memory制限、実PostgreSQL role/TTL/冪等/失効 | trusted issuer/SQL。停止中の既存DB sessionは期限切れだけで終了しない |
+| G10 | DB DEK/設定/E2E rotation、永久廃止、source/binary/config/host/epoch/期限束縛 | 更新時の停止・新世代path・再受入 |
+| G11 | 実認可/共有型/実32byte split/commit controllerの機械検証、反例付き変異試験 | PROOF_CONTRACT.mdのprimitive契約。全service simulation theoremではない |
+| G12 | 指定鍵署名と完全性、受入snapshot、transitive入力pin、各種負例 | 署名者・ログ出所の信頼。異なる鍵は異なる人間の証明ではない |
+| G13 | locked build、依存監査、固定tools/images、両OS clean rebuild、独立agentレビュー | compiler等はTCB。第三者認証とは呼ばない |
 
-## Kani: 実コードに対する14 harness
+## 形式検証
 
-`crates/policy`はno_std、I/O/crypto/unsafeを持ちません。Rust 1.91.1で製品をビルドし、Kani 0.66.0付属nightly/CBMCで同じ実コードを検査します。scalar stateに小さい定数範囲を仮定せず、各型の全ビットパターンを対象にします。
+Kaniは製品と同じno_std policyコードをRustの全scalar bit幅で検証します。wire field比較、OAuth/DPoP、challenge、execution、実Request変換、State遷移、永続順序、UID/失効/期間、証跡methodと物理除外、32byte share処理を含みます。scope文法は実装の入力上限256 byte全域です。harness数と成否の正本は `commands/kani.log` です。署名関数やserde/OpenSSL/OSをKaniに渡した証明ではありません。
 
-1. consumeのaccept/rejectが宣言的allowed仕様と同値で、成功時の回数・sequence・不変fieldが仕様どおり。
-2. token/DPoPが有効でもdeviceまたはguardianの一方が欠ければ拒否。
-3. 確定後の同一sequenceを拒否。
-4. revoked/lockedを拒否。
-5. 異なるepochまたはwitness欠如を拒否。
-6. 成功時のbudget厳密減少・sequence厳密増加。
-7. 実装の1byte XOR分割の復元性と、一方のshareは任意の候補秘密と両立する代数。
-8. UID allocatorの算術がroot/AIを選ばず、成功時の次UIDが増加。
-9. request_periodがu128の数学的期間仕様と一致し、overflowしない。
-10. acceptance_checkは必要な証跡methodを省略できず、softwareをphysicalの代用にできない。
-11. bindings_matchは全12項目のrecord equalityと一致。
-12. recoveryのretired stateからconsumeが成功しない。
-13. 実`authorize_and_commit`＋`ordered_commit`がatomic disclosure仕様と同値で、witness→DB確定後にのみ一回の開示capabilityを返す。
-14. 物理試験の除外がG04/G05のphysical method以外を省略できず、software evidenceも必須である。
+TLCのbaselineは一つのgrant、4 request identities、budget/challenge/admin/provider attempts各2の有限探索です。拡張モデルのレビュー時探索は1,587,137 distinct states、9,465,906 generated、depth 33でした。再実行ログを正本とし、fingerprint衝突評価も残します。6防御の削除は指定不変条件の反例を必須とし、3到達性試験で正規release・同一issue再送・admin crash後quarantineを確認します。
 
-詳細な対応と残る仮定は[PROOF_CONTRACT.md](PROOF_CONTRACT.md)を参照。
+実Rust sourceの認可検査を削除するmutationも、対応harnessの `VERIFICATION:- FAILED` を必要とします。コンパイル失敗は検出成功として数えません。暗号学的安全性、任意人数の無限状態、全サービスのlivenessや未知脆弱性の不存在を証明したとは扱いません。
 
-Bindingの検査はgeneric関数をu128/u8にinstantiateしたものです。実サービスはUUID・文字列・Action・IssueSpecの等値性を使い、Grant/Operationからの変換は手動コードです。その等値性、serialization、変換自体をKaniで証明したとはしません。実行試験で全security fieldを改変して拒否を確認します。
-
-5署名flagの走査のみunwind=6でunwinding assertionを検査します。無限ループの任意打切りではありません。XORの証明は乱数の一様性、AEAD／HPKEの計算量的安全性の証明ではありません。Kani/CBMC/Rust変換の健全性はTCBです。到達しないunsupported intrinsicに関する警告もログに残します。
-
-`scripts/check-kernel-mutations.py`は実sourceからguardian・sequence・recipient照合・witness先行処理を除去したコピー、および常に拒否する変更を検証し、対応harnessが反例を出すことを要求します。単なるbuild失敗を成功扱いしません。正規成功の実行試験により全拒否だけで安全性を満たしていないことも確認します。
-
-## TLC: 有限並行モデル
-
-`formal/Vault.tla`: honest要求2個、token/DPoP盗難、deviceOnly、guardianOnly、budget=2。DBロック、witness先行予約、DB commit、開示、失効、crash、過去diskへのrollback、owner-authorized quarantineをモデル化します。commit後〜開示前にも別要求や失効が入れます。
-
-TypeOK、NoUnauthorizedRelease、NoReplay、BoundedRelease、CommitBeforeDisclosureを検査します。復旧追加後の構成は11,754 distinct states、50,461 generated、深さ16。正本は実行ログです。fingerprint衝突確率の評価も残します。
-
-guardian、device、witness、commit-before-releaseの各検査を無効にした4モデルについて、指定不変条件の反例を必須にしています。**これらの非ゼロ終了は期待された検出成功**です。任意人数／無制限状態の帰納証明やliveness証明ではなく、JWT/crypto/SQL詳細は抽象化されています。TLAとRustサービス全体とのsimulation relationは未証明です。
-
-## 実行証跡
-
-`evidence/latest/manifest.json`に今回のコマンド・成否、`commands/*.log`にstdout/stderr、`model/`と`mutations/`に反例を含む結果、`sources.json`に対象source SHA-256、`report.md`に要約を保存します。前のrunは`evidence/archive/`へ保存します。
+## 実行と統合
 
 ```sh
+python3 scripts/restore-vendor.py
+bash scripts/prepare-tools.sh
 python3 scripts/verify.py --with-docker --macos-cross
+python3 scripts/release-evidence.py evaluate \
+  --linux evidence/latest --macos evidence/macos --output evidence/release.json
 ```
 
-開始／終了時のsource hashを比較し、途中変更があれば成功扱いしません。all-feature clippy/test、Kani、TLC、mutation、実OAuth AS、実PostgreSQL、swtpm、Linux別UID隔離、実CLI deployment、Macクロスビルド、依存監査、release、別targetのclean rebuild、未受入起動の拒否を記録します。未実行の項目はNOT_RUNです。
+Linux runは開始/終了source不変、format/clippy/test、実OAuth AS、Kani/TLC/mutation、実PostgreSQL、swtpm、別UID隔離、実CLI deployment、監査、release/clean rebuildを記録します。MacはGitHub `macos-15` runner上でunit/integration、OAuth、OS隔離とACL、実CLI二人利用/再起動/失効、Swift helper build、clean rebuildを行います。Mac cross buildだけではMac runtime evidenceを満たしません。
 
-OS隔離試験はrootless Docker内で実際のLinux UIDを切り替えて行います。TPM鍵は使わず、broker stateの合成データを保護して確認する試験です。Macの試験や物理鍵耐性を示しません。clean rebuildは同一host/compilerで別targetへ再コンパイルしたbyte一致検査であり、独立builderによるsupply-chain保証ではありません。
+各manifestはsource一覧、source fingerprint、binary/log SHA-256を持ちます。統合validatorは両OSのsource一致、全必要検査、ログdigest、レビュー結果を照合します。これはレビューされた実行ログからの条件付き判定であり、hashや署名がログの真実性まで証明するものではありません。`readiness`の成功fixtureは検査器の試験で、実配置の受入にexportしません。
 
-readinessの成功fixtureは検査器の単体テストに限ります。fake証跡を製品受入として出力しません。実際の受入記録がない現状のreadinessはfalseであり、通常のserve/witness/brokerを拒否します。native運用を実証したとする署名は発行していません。
+## レビューと依存
 
-CI workflowは追加しましたが、GitHub Actionsはまだ実行していません。公開リポジトリへのソース登録は自動承認審査に拒否され、利用者の明示承認を待っています。Mac ARM64向けのRustとSwiftはLinux上でApple SDKを使ってリンクまで実行しました。これはmacOS上の実行証跡ではありません。
+[REVIEW.md](REVIEW.md)に別agentの所見・修正・残る仮定を保存します。自動化された独立コンテキストのレビューであり、独立組織や人間の認証ではありません。Mac CIで見つかったTLS証明書生成差、DB parent alias/NOFOLLOWの差も実行で修正しています。
 
-## 依存関係
-
-初回監査でcrypto-bigint、SQLite/WAL、RSAの既知報告を検出しました。P-256/HPKEを修正版に更新し、rsa crateを除去してOpenSSL公開鍵暗号化へ置換しました。libsqlite3-sysの依存先をSQLCipher 4.20.0／SQLite 3.54.1へ変更した1行patchをvendor化しています。upstream digestと差分は`vendor/PROVENANCE.json`、検査は`scripts/check-vendor.py`。C実装を独自改変していません。
-
-最新の監査結果とRustSec DB commitはログが正本です。既知報告0件は未知の脆弱性の不存在を意味しません。OpenSSL／kernel／firmware／interpreter／compilerの更新もTCB管理に含まれます。
-
-## 本番trueの判定
-
-物理鍵試験は利用者指定で今回の条件から除外しました。実装にも署名対象Releaseとroot管理policyの両方に明示する条件を追加し、ほかの条件は省略できないことを検証しています。
-
-今回、サービス鍵のstartup-only解錠、実ASプロトコル連携、Macクロスビルド、鍵rotation、実CLIの二人利用とrestartを追加しました。残るのはmacOS上のソフトウェア実行証跡、サービス全体のrefinement、独立レビュー、実配置に対する署名付き受入です。いずれも物理鍵の未接続と同じ理由ではありません。Mac CIは公開登録の承認待ち、別レビューagentは利用許可待ちです。レビューagentを使えても第三者機関の認証とは呼びません。
-
-Kaniが証明した命題、TLCの有限探索、実行試験、仮定に残る部分を混同して本番trueとは記録しません。配置用の三者署名を同じ自己生成鍵で偽造して受入を通すこともしません。
+初回監査のcrypto-bigint/SQLite/RSA報告に対応し、P-256/HPKEを更新し、RSA private crateを製品から除去しました。libsqlite3-sysはupstream archive digestとSQLCipher/SQLite依存指定の1行patchを検証します。Cコードの独自改変はありません。最新RustSec DB commitと監査結果は実行ログが正本です。compiler/kernel/OpenSSL/helper等の更新も新しい配布物と配置受入の対象です。

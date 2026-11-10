@@ -4,7 +4,7 @@
 
 | 環境 | バックエンド | 保護と現在の証跡 |
 |---|---|---|
-| Secure Enclave搭載Mac | Security.framework、P-256署名／ECDH | Apple SDKでRust／SwiftのARM64 Mach-O生成済み。userPresence＋WhenUnlockedThisDeviceOnly。Mac上の実行は未実施 |
+| Secure Enclave搭載Mac | Security.framework、P-256署名／ECDH | Apple SDKでRust／SwiftのARM64 Mach-O生成済み。userPresence＋WhenUnlockedThisDeviceOnly。Macソフトウェアはnative CIで検査。物理SE試験は除外 |
 | Linux＋物理TPM2 | tpm2-tools、fixedTPM/fixedParent鍵、PIN | helper source提供。swtpmでコマンド形式・ECDH一致・署名・誤PIN拒否を実行。物理耐性の証拠ではない |
 | 外部PKCS#11 | RSA-OAEP復号／ECDSA署名 | feature=pkcs11でコンパイル、実デバイス未接続 |
 | 内蔵保護装置なし | 未対応 | ソフトウェア鍵だけで盗難耐性を同等としない。別の保護されたguardian端点を設ける必要あり |

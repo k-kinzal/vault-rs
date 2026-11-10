@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "review_kind": "independent_agent_source_review",
+  "report": "docs/REVIEW.md",
+  "unresolved_findings": [],
+  "scope": "Integrated authorization, persistence ordering, accepted generation, expiry and configuration fixes; source review, not whole-service certification"
+}

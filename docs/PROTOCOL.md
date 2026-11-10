@@ -23,7 +23,7 @@
 
 ## OAuth / DPoP profile
 
-これはOAuth Resource Serverの厳格なprofileであり、新しいAuthorization Serverではない。ASとのauthorization-code/PKCE/同意UIやJWKS rotationは未実装。
+これはOAuth Resource Serverの厳格なprofileであり、新しいAuthorization Serverではない。brokerはauthorization-code/S256 PKCE/DPoPを実装する。同意UIは接続先ASに委ねる。issuer鍵は固定し、自動JWKS rotationを行わず配置更新で切り替える。
 
 ASはES256 `typ=at+jwt`、固定issuer署名鍵、`iss,aud,sub,nbf,exp,scope,grant_id,cnf.jkt`を発行する。scopeは`secret:read`または`secret:issue`で、owner grantとの積集合が実効権限になる。scopeだけで秘密を選べない。
 

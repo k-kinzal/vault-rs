@@ -267,7 +267,10 @@ fn response<T: DeserializeOwned>(response: reqwest::blocking::Response) -> Resul
     Ok(serde_json::from_slice(&bytes)?)
 }
 
-pub fn run(config_path: PathBuf) -> Result<i32> {
+pub fn run(
+    config_path: PathBuf,
+    accepted: Option<crate::readiness::ConfigurationSnapshot>,
+) -> Result<i32> {
     ensure!(
         nix::unistd::getuid().is_root() && nix::unistd::geteuid().is_root(),
         "broker must be started by its administrator service, not the AI UID"
@@ -276,7 +279,11 @@ pub fn run(config_path: PathBuf) -> Result<i32> {
     #[cfg(target_os = "linux")]
     nix::sys::prctl::set_dumpable(false)?;
     runner::protected_path(&config_path)?;
-    let config: BrokerConfig = serde_json::from_slice(&runner::read_bounded(&config_path, 65536)?)?;
+    let bytes = match accepted {
+        Some(snapshot) => snapshot.bytes().to_vec(),
+        None => runner::read_bounded(&config_path, 65536)?,
+    };
+    let config: BrokerConfig = serde_json::from_slice(&bytes)?;
     ensure!(config.ai_uid != 0, "AI must not have broker privileges");
     ensure!(
         !(config.uid_base..config.uid_limit).contains(&config.ai_uid),

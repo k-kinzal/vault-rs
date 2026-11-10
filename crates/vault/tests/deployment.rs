@@ -117,16 +117,19 @@ fn real_cli_services_broker_two_users_restart_and_revocation() {
     let binary = PathBuf::from(std::env::var("VAULT_TEST_RUNNER_BIN").unwrap());
     let helper = PathBuf::from("/opt/deployment-test-helper");
     #[cfg(target_os = "macos")]
-    let key_uid = Some(
-        std::env::var("VAULT_TEST_MACOS_KEY_UID")
-            .unwrap()
-            .parse::<u32>()
-            .unwrap(),
-    );
+    let fixture_uid = std::env::var("VAULT_TEST_MACOS_KEY_UID")
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
     #[cfg(not(target_os = "macos"))]
-    let key_uid: Option<u32> = None;
+    let fixture_uid = 0;
+    let key_uid = if cfg!(target_os = "macos") {
+        Some(fixture_uid)
+    } else {
+        None
+    };
     let output = Command::new(&helper)
-        .args(["--fixture-init", &key_uid.unwrap_or(0).to_string()])
+        .args(["--fixture-init", &fixture_uid.to_string()])
         .output()
         .unwrap();
     assert!(output.status.success());

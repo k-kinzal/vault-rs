@@ -1,8 +1,8 @@
 # vault-rs
 
-Rustによる二者承認・E2E暗号の秘密情報管理。最終目標は **本番利用 `production_ready=true`** です。[13の必須受入条件](docs/PRODUCTION_GOAL.md)を固定し、物理鍵の実機試験だけを利用者の指定で除外し、合成データを実機証跡とは扱いません。
+Rustによる二者承認・E2E暗号の秘密情報管理。Mac/Linuxで同じHTTPS・認可・暗号実装を使い、OAuth＋DPoPに加えて独立したdevice/guardian承認を必須にします。
 
-**現時点ではゴール未達、本番利用不可です。** 物理鍵試験は対象外です。macOS上での実行、サービス全体のrefinement、独立レビュー、実配置の受入証跡は揃っていません。OAuth code＋S256 PKCE＋DPoPの実AS接続、無人サービス用のresident鍵、DB／E2E／設定鍵のrotation、Linuxでの実CLI運用試験、Mac ARM64へのRust／Swiftクロスビルドを追加しました。署名付き証跡がない本番起動は拒否します。詳細は[保証範囲](docs/ASSURANCE.md)にあります。
+本番利用の条件は[13の受入条件](docs/PRODUCTION_GOAL.md)で定義しています。製品の判定はLinuxとMacの同一sourceの証跡を統合した `evidence/release.json`、導入先の判定は署名付き受入を検査する `vault-rs readiness` です。物理鍵実験だけを利用者指定で除外します。[保証範囲](docs/ASSURANCE.md)と[証明の契約](docs/PROOF_CONTRACT.md)に、直接証明した命題とcrypto/OS/DB等の前提を記載しています。
 
 ## 実装した機構
 
@@ -38,6 +38,6 @@ cargo run --locked -p vault-rs -- observe --config /absolute/path/config.json
 
 ## 利用インターフェース
 
-`seal`、`protect-config`、`generate-service-key`、`rotate-storage`、`rewrap-config`、`measure-bundle`、`broker`、`approve`、`serve`、`witness`、`observe`、`readiness`を提供します。owner／guardianの承認は、型を固定したJSONとネイティブ鍵の確認画面／PINを通します。汎用OAuth同意UI・組織管理UIは含みません。
+`initialize-storage`、`seal`、`protect-config`、`generate-service-key`、`rotate-storage`、`rewrap-config`、`measure-bundle`、`broker`、`approve`、`serve`、`witness`、`observe`、`readiness`を提供します。owner／guardianの承認は、型を固定したJSONとネイティブ鍵の確認画面／PINを通します。汎用OAuth同意UI・組織管理UIは含みません。
 
 [鍵・OAuth・復旧の運用](docs/OPERATIONS.md)、[brokerと受入](docs/BROKER.md)、[プロトコル](docs/PROTOCOL.md)、[脅威モデル](docs/THREAT_MODEL.md)、[鍵登録と実機検証](docs/HARDWARE.md)、[構成例](examples/)を参照してください。構成例はプレースホルダーであり、そのまま起動できません。テスト用PEMは公開済み合成データです。

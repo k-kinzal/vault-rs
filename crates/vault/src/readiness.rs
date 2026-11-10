@@ -238,6 +238,7 @@ pub struct Observed {
 }
 #[derive(Serialize)]
 pub struct Report {
+    pub decision_scope: &'static str,
     pub production_ready: bool,
     pub source_sha256: String,
     pub blockers: Vec<String>,
@@ -483,6 +484,7 @@ pub fn report(files: Option<&AcceptanceFiles>, config: Option<&Path>) -> Report 
             .collect(),
     };
     Report {
+        decision_scope: "deployment",
         production_ready: blockers.is_empty(),
         source_sha256: SOURCE_SHA256.into(),
         blockers,

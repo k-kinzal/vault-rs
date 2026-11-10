@@ -254,14 +254,7 @@ fn open_unleased(
             .sync_all()?;
     }
     private_regular_file(path)?;
-    // macOS exposes its temporary directory through /var -> /private/var.
-    // Resolve only the parent; SQLITE_OPEN_NOFOLLOW still rejects a leaf link.
-    // Production configuration separately requires a protected canonical parent.
-    let sqlite_path = path
-        .parent()
-        .context("database parent missing")?
-        .canonicalize()?
-        .join(path.file_name().context("database filename missing")?);
+    let sqlite_path = canonical_parent_path(path)?;
     let db = Connection::open_with_flags(
         sqlite_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -282,6 +275,16 @@ fn open_unleased(
         r.get::<_, i64>(0)
     })?;
     Ok(db)
+}
+
+// Resolve system directory aliases (not the DB leaf). SQLite's NOFOLLOW
+// protection applies both to opening the main database and ATTACH during rotation.
+fn canonical_parent_path(path: &Path) -> Result<std::path::PathBuf> {
+    Ok(path
+        .parent()
+        .context("database parent missing")?
+        .canonicalize()?
+        .join(path.file_name().context("database filename missing")?))
 }
 
 /// Explicit administrative initialization. A failed/partial existing generation
@@ -336,7 +339,9 @@ pub fn rotate_generation(
     source_db.execute(
         "ATTACH DATABASE ?1 AS rotated KEY ?2",
         rusqlite::params![
-            destination.to_str().context("non-UTF8 database path")?,
+            canonical_parent_path(destination)?
+                .to_str()
+                .context("non-UTF8 database path")?,
             password.as_str()
         ],
     )?;

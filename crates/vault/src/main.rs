@@ -6,7 +6,7 @@ use vault_rs::crypto::*;
 #[derive(Parser)]
 #[command(
     version,
-    about = "Dual-authorized E2E Vault — experimental; see assurance report"
+    about = "Dual-authorized E2E Vault; authenticated deployment acceptance required"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -252,8 +252,11 @@ async fn main() -> Result<()> {
             acceptance,
             verification_run,
         } => {
-            require_acceptance(acceptance, &config, verification_run)?;
-            let code = tokio::task::spawn_blocking(move || vault_rs::broker::run(config)).await??;
+            let accepted = require_acceptance(acceptance, &config, verification_run)?;
+            let code = tokio::task::spawn_blocking(move || {
+                vault_rs::broker::run(config, accepted.map(|a| a.configuration))
+            })
+            .await??;
             anyhow::ensure!(code == 0, "workload exited with status {code}");
             Ok(())
         }

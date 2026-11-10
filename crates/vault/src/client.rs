@@ -44,7 +44,7 @@ impl RecipientSession {
             "rotation requires an authorized read"
         );
         let plaintext = self.open(trust, request, response, device, now)?;
-        let mut context = response.record.context.clone();
+        let mut context = response.record.context;
         context.version = context
             .version
             .checked_add(1)

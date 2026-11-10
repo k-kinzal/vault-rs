@@ -17,7 +17,7 @@
 | 許可範囲外の操作・別ユーザーのgrant | owner署名、OAuth sub、grant ID、action、resourceの一致を強制 | owner／ASの鍵を信頼 |
 | 二重送信・同時送信・クラッシュ | witness→DB確定→開示の順序、使用回数を消費 | SQLiteのロック／fsync、witness CASを信頼 |
 | 悪意あるextension入力 | role・TTL・providerを固定、任意SQL不可 | 実際のPostgreSQL権限設定とtrusted issuerを信頼 |
-| AI／ツールの依存関係侵害 | grantの実行物ハッシュ／recipient束縛、鍵をHTTPで公開しない | root管理broker／使い捨てUIDを実装、Linux隔離試験済み。Mac実機未検証 |
+| AI／ツールの依存関係侵害 | grantの実行物ハッシュ／recipient束縛、鍵をHTTPで公開しない | root管理broker／使い捨てUIDを実装、Linux隔離試験済み。Macソフトウェアはnative CI、物理鍵試験は除外 |
 | PC盗難 | Secure Enclave＋user presence、TPM＋PINを設計 | 物理実機未検証。稼働中でアンロック済みのPC全体を奪われる場合は未解決 |
 | サービス／OS／コンパイラの侵害 | TCB侵害として保証外 | 独立guardian、最小権限、更新承認、再現ビルド検証が必要 |
 

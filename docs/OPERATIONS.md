@@ -1,6 +1,6 @@
 # OAuth・サービス鍵・更新・復旧
 
-この文書は実装した操作の契約です。物理デバイスの実験は利用者指定で除外しています。Mac上での実行やサービス全体の形式的refinementを済ませた、という意味ではありません。
+この文書は実装した操作の契約です。物理デバイスの実験は利用者指定で除外しています。Mac/Linuxの実行結果は各manifestで確認します。形式保証の契約はPROOF_CONTRACT.mdに記載します。
 
 ## OAuth ASの接続
 
@@ -60,3 +60,18 @@ E2E recordは`RecipientSession::rotate_record`で更新します。旧recordへ�
 ## 再現する試験
 
 `test-deployment.sh`はrootless Docker内で本物のCLIを別プロセスとして起動します。HTTPS witness／Vault、二人のsubject、brokerのprivate control pipeと別UIDのworkload、resident鍵のstartup-only解錠、プロセス再起動、失効を確認します。native helperとissuer鍵は合成fixtureで、物理デバイス証跡には分類しません。`test-oauth.sh`はこれと別に実ASのprotocolエンジンを検査します。この二つを一つの本番配置で通したという主張はありません。
+
+## 初回DB生成と設定測定
+
+本番起動前にroot管理のcanonical absolute directoryを用意します。Macでは `/var` aliasを設定に使わず `/private/var` 等のcanonical pathを指定します。サービスとAIのアカウントを分離し、AIにsudo権限を与えません。設定・helper・CA・extension・provider envelopeをroot管理pathに置き、group/otherの書込みとMac extended ACLを除きます。
+
+```sh
+vault-rs initialize-storage --database /opt/vault-data/vault.db --key-config /opt/vault-config/decryption.json
+vault-rs observe --config /opt/vault-config/server.json
+```
+
+initialize-storageは既存DB／鍵envelopeを上書きせず、新しい暗号化世代とそのdigestを作ります。サービスのdecryption RuntimeKeyConfigと同じ鍵を指定します。witness DBも同様です。observeのconfig hashは設定本体に加え、roleとcanonical pathを付けたhelper/CA/鍵envelope/provider/extension等の内容とDB鍵envelopeを束縛します。DBの可変pageは含めません。受入済みgenerationと違うenvelopeはunwrap前に拒否します。
+
+以後、署名付きrelease/review/deploymentとauthority policyを登録し、readinessが成功した構成だけをserve/witness/brokerの `--acceptance` に渡します。releaseの配布物検証が完了していても、自分の配置を誰かが承認したことにはなりません。必要な署名は登録した実際の権限主体が `approve` コマンドで行います。
+
+稼働中の受入済みhelper・CA・provider config等の上書きは禁止です。更新は停止→新世代pathへの配置→observe→再承認→起動の順で行います。rootの悪意ある変更はこの保証の外ですが、誤った同時更新も避けます。token期限が30秒より短い場合もoperation期限をtokenに合わせ、device操作中に期限が過ぎればworkloadへ値を渡しません。

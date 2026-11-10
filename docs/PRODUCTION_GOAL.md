@@ -1,6 +1,10 @@
-# 本番利用のゴール v2（物理鍵試験の明示除外）
+# 本番利用のゴール v3（製品と導入先の判定）
 
-最終目標は `production_ready=true` であり、試作の完成ではない。以下は利用者の要求を維持した受入条件である。利用者が「物理鍵は検証できませんがそれ以外は達成」と指定したため、G04/G05の物理鍵実験のみ対象外とする。これは非エクスポート性を実験で証明したという意味ではない。OS上のソフトウェア試験、形式検証、独立レビューは除外しない。mockを実機と扱う変更、期待値をtrueにするだけの変更は達成としない。
+最終目標は本番利用できる製品です。`production_ready`には必ず判定scopeを付けます。`software_release`は以下G01〜G13の実装・Mac/Linuxソフトウェア証跡・条件付き保証が揃った配布物、`deployment`はその配布物を特定host/config/key-generationで稼働させる受入です。前者は `scripts/release-evidence.py evaluate`、後者は実CLIの `readiness --acceptance ... --config ...` で判定します。
+
+以前のv2では製品開発の完了と利用者の未指定hostへの配置署名を同一判定にしていました。これを分離し、導入先が未指定でも製品を検証できるようにします。未指定の配置を架空の署名で受け入れたり、全体系の無条件証明へ言い換えたりしません。G01〜G13の防御と物理試験だけの除外は維持します。
+
+以下は利用者の要求を維持した受入条件である。利用者が「物理鍵は検証できませんがそれ以外は達成」と指定したため、G04/G05の物理鍵実験のみ対象外とする。これは非エクスポート性を実験で証明したという意味ではない。OS上のソフトウェア試験、形式検証、独立レビューは除外しない。mockを実機と扱う変更、期待値をtrueにするだけの変更は達成としない。
 
 ## 対象
 
@@ -28,11 +32,13 @@ OSカーネル、保護装置の暗号実装、ownerの承認端点、独立guar
 | G12 | 本番判定が偽造・古いログ・自己申告だけで通らない | 指定承認鍵の署名、source/binary/config/環境束縛、証跡期限、全条件の完全性、負例試験 |
 | G13 | リリースを再現して保守できる | locked build、依存監査、固定tool/image、全ログとdigest、独立したreviewの記録 |
 
-Mac/Linux双方の必要条件が満たされ、製品と配置先を識別する証跡が揃った時にのみ、本タスクの総合ゴール達成とする。個別のチェック関数がsynthetic fixtureに対してtrueを返すことや、LinuxだけのPASSを総合達成とは扱わない。
+Mac/Linux双方の製品条件が満たされ、同じsourceの実行ログ・配布binary・レビュー・形式検証が揃ったときだけ `software_release.production_ready=true` とします。G11の保証はPROOF_CONTRACT.mdの直接機械検証と抽象化境界です。OS/crypto/DBの内部まで無条件に証明したという条件ではありません。Kani等のOS非依存部分は両OS共通の同じコードについて検証し、OS依存の隔離・HTTPS/CLI・OAuth・再buildは各OSで実行します。
 
-## 現在確認できる実行環境
+導入時にはさらにG04/G05の鍵登録、独立guardian/witness、信頼できる時刻、保護された管理path、実AS、配置先の観測と承認が必要です。これを検証して初めて `deployment.production_ready=true` となります。検査器のsynthetic成功fixture、LinuxだけのPASS、異なるsourceのMacログでは製品達成としません。
 
-2026-11-10時点で実行済みなのはLinuxクラウド環境と、そのrootless Docker内の独立UID試験。Mac ARM64用Rust本体とSwift helperはApple SDKでクロスビルド済み。`/dev/tpm0`、`/dev/tpmrm0`は存在せず、Mac用接続先・実機runner・認証情報は登録されていない。GitHubコネクタは利用可能で空リポジトリと作業branchを初期化したが、公開ソース登録は自動承認審査に拒否され、利用者の明示承認待ちのためActionsは実行していない。存在しない検証結果を証跡へ記載しない。
+## 証跡の正本
+
+Linuxは `evidence/latest/`、macOSはGitHub Actionsの `macos-software-evidence` artifactを取得した `evidence/macos/`、統合判定は `evidence/release.json` です。実行したcommit、source fingerprint、binary/log SHA-256を保存します。ファイルが無い、試験失敗、source不一致のときは判定を通しません。公開ソースとMac CI、別agentレビューは利用者の承認に基づき実施しています。
 
 ## 除外の改ざん防止
 

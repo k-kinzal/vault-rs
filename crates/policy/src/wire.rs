@@ -116,7 +116,6 @@ pub struct Confirmation<D> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
 #[cfg_attr(feature = "wire", derive(serde::Serialize, serde::Deserialize))]
-
 pub struct AccessClaims<I, D, S> {
     pub iss: D,
     pub aud: D,
@@ -214,7 +213,7 @@ impl ScopeSet {
             return None;
         }
         let mut mask = 0;
-        let mut length = 0usize;
+        let mut length = 0u8;
         let mut read = true;
         let mut issue = true;
         for &b in bytes {
@@ -235,9 +234,10 @@ impl ScopeSet {
                 if !(b == 0x21 || (0x23..=0x5b).contains(&b) || (0x5d..=0x7e).contains(&b)) {
                     return None;
                 }
-                read = read && b"secret:read".get(length) == Some(&b);
-                issue = issue && b"secret:issue".get(length) == Some(&b);
-                length += 1;
+                read = read && b"secret:read".get(usize::from(length)) == Some(&b);
+                issue = issue && b"secret:issue".get(usize::from(length)) == Some(&b);
+                // Beyond 12 bytes neither recognized scope can match.
+                length = length.saturating_add(1).min(13);
             }
         }
         if length == 0 {
