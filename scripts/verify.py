@@ -33,7 +33,7 @@ run('python-syntax',['python3','-c','import ast,pathlib; files=[*pathlib.Path("p
 run('clippy',['cargo','clippy','--locked','--workspace','--all-features','--all-targets','--','-D','warnings'])
 run('tests',['cargo','test','--locked','--workspace','--all-features'])
 run('oauth',['bash','scripts/test-oauth.sh'])
-run('kani',['cargo','kani','-p','vault-policy','--output-format','terse'])
+run('kani',['cargo','kani','-p','vault-policy','-j','4','--output-format','terse'])
 run('model',['python3','scripts/check-model.py','--output',str(out/'model')])
 run('kernel-mutations',['python3','scripts/check-kernel-mutations.py','--output',str(out/'mutations')])
 if a.with_docker:
