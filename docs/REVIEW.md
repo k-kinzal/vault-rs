@@ -314,3 +314,35 @@ These SHA-256 values bind the source bytes inspected above, on top of127b354, be
 - `.github/workflows/verify.yml`: `60c77b59585079b54805f908396fda0a3c705e1920b209a7c761a756d9658885`
 - `docs/BROKER.md`: `9cd82b4b65de89bb80bfe21aa54c8666755134221a1758bccf785284c5e15d82`
 - `docs/OPERATIONS.md`: `7d65f39f46a1d9ff51c2962d079ac27a4164c6aa062920602f789d2b95777da1`
+
+
+---
+
+# Bounded Mach-O release-source review
+
+Reviewed uncommitted changes on top of `dca3ba6e6b5fdba7eb38f100f16bc7019670cbe4`. The scope is the four files hashed below and their existing release-build, evidence and packaging call sites. No product source was modified by the reviewer.
+
+**Disposition: no concrete release-acceptance or security regression found within this bounded source scope.** This is source-review evidence; the effect on native macOS reproducibility remains unverified until the new CI run succeeds. The previous review's OS/compiler/producer/CI trust contracts still apply.
+
+## Inspected changes
+
+- `scripts/build-release.sh:5-10` sets `ZERO_AR_DATE=1` for archive production and appends `-C link-arg=-Wl,-no_uuid` only on native Darwin. The same helper continues to build the reference native executable and its clean-target comparison, with the same locked workspace/features/targets. The change requests deterministic linker/archive behavior at build time; it does not rewrite completed binaries. Native toolchain behavior and the trusted build environment remain assumptions. These options alone are not proof of deterministic output.
+- Mach-O UUIDs are not used as the application's authorization identity. The inspected readiness path binds the entire running executable's SHA-256 (`readiness.rs:320-326,423-427`). The source changes do not disable signing, remove code signatures after linking, or substitute an unsigned/normalized hash for the delivered executable. UUID removal can affect debugger/crash-symbol association; no such association is a stated authorization primitive here. The OPERATIONS addition accurately retains full-binary measurement and comparison.
+- `scripts/check-reproducible.py:35-54` continues to compare SHA-256 of the complete reference and clean-rebuilt executables. Every unequal result enters a branch that raises failure. Source fingerprint equality, section equality, absent UUIDs and code-signature hashes cannot turn a mismatch into a pass.
+- The new `macho_layout` helper is invoked only inside that already-failing branch. The inspected 64-bit little-endian field offsets match segment/section, UUID, symbol-string-table and code-signature layout; zero-fill section types are omitted only from diagnostic payload hashing. This diagnostic is deliberately incomplete: it does not validate all Mach-O structure or enumerate every load command. Its results are not acceptance predicates. An unsupported file returns no layout, while malformed data may raise an exception; neither path bypasses the previously established byte mismatch.
+- `.github/workflows/verify.yml:87-93` uploads the narrow `.tools/repro-failure/` directory only after failure, with explicit `include-hidden-files: true`. The reviewed script places the two local compiler-output executables there; it does not collect private key stores. The failure artifact has its own name and is not downloaded by the packaging job. Upload success cannot clear the job failure: the release job still requires successful Linux and macOS jobs and the normal evidence evaluator. Missing diagnostic files are ignored only for this failure-debugging upload.
+
+## Checks and execution boundary
+
+The reviewer checked shell syntax with `bash -n`, parsed the Python script's AST, and checked the diff for whitespace errors. These checks passed. The reviewer did not rebuild, execute native macOS probes or validate new CI logs in this pass.
+
+The parent reports dca3ba6 Linux checks passed and native Mac OAuth, UID/ACL/memory/FD isolation and CLI deployment passed, but complete binary reproducibility failed despite equal embedded source fingerprints. Those earlier observations do not establish reproducibility for the changed source. The parent also reports parsing an existing cross-built helper's Mach-O layout; this is diagnostic parser exercise, not native execution evidence. Fresh same-source native CI must still succeed before release acceptance. Any subsequent report insertion changes the source identity and must precede the final evidence-producing builds.
+
+## Exact reviewed worktree digests
+
+These values identify source bytes, not binaries or signed attestations.
+
+- `scripts/build-release.sh`: `da6189e7bb6342c4790c71dc9122c9f3b57a5e01c34df87dd8dfa611dd98f16f`
+- `scripts/check-reproducible.py`: `2d1c09089b64404d791469ace5b742495f657457706390c7973afc714824933f`
+- `.github/workflows/verify.yml`: `104288841ff70ac5c7753c2731c53107bc15ea0a074b13eebe64db9f65b0f57c`
+- `docs/OPERATIONS.md`: `1dfc8d80bab792e3c1c8e6c610320d3b28e859377280a884313041d2ba8f0881`

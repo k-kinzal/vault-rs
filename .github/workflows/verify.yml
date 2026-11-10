@@ -84,6 +84,13 @@ jobs:
         with:
           name: macos-software-evidence
           path: evidence/macos/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: failure()
+        with:
+          name: macos-repro-diagnostic
+          path: .tools/repro-failure/
+          include-hidden-files: true
+          if-no-files-found: ignore
       # These are actual macOS software tests; physical SE presence is excluded.
   release-evidence:
     needs: [linux, macos-software-verification]
