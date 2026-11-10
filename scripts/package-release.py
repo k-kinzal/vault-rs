@@ -30,7 +30,7 @@ with tarfile.open(a.output/'source.tar.gz', 'w:gz') as archive:
         archive.add(ROOT/name, arcname='vault-rs/'+name, recursive=False)
 provenance = {'repository': os.environ.get('GITHUB_REPOSITORY'),
               'commit': os.environ.get('GITHUB_SHA'),
-              'head_commit': os.environ.get('GITHUB_HEAD_REF'),
+              'head_ref': os.environ.get('GITHUB_HEAD_REF'),
               'run_id': os.environ.get('GITHUB_RUN_ID'),
               'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
               'source_commit': subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),

@@ -30,7 +30,7 @@ TypeOK、NoUnauthorizedRelease、NoReplay、BoundedRelease、CommitBeforeDisclos
 1. 登録した鍵に対する署名の偽造困難性、HPKE/AEADの機密性と完全性、hashの衝突困難性、独立で予測できない乱数。
 2. parserが指定形式のfield意味を保存すること、Rust標準iteratorと制御フローが逐次foldと拒否伝播の意味を保存すること。SQLCipher暗号とメモリ処理、SQLiteのatomic/durable/serialized transaction、PostgreSQLの権限とtransaction契約。
 3. witness CASが線形化可能で、Vault DBとは独立に永続化され、攻撃者が両者を同時に巻き戻せないこと。
-4. OSのUID/FD/process/memory/ACL/ファイル保護、native helperと鍵登録、信頼できる新しい時計。root、OS kernel、必要な承認domainの全てが攻撃者に支配されていないこと。
+4. OSのUID/FD/process/memory/ACL/ファイル保護、native helperと鍵登録、信頼できる新しい時計。Darwinのグループ降格はcrates/platformの最小syscall adapter（setgroups→setgid→setuid、全失敗を拒否）に閉じ込め、exec後にもUID/GID/OpenDirectory所属を検査します。このOS primitiveは直接Kaniの対象ではなく、レビューとnative隔離試験の対象です。root、OS kernel、必要な承認domainの全てが攻撃者に支配されていないこと。
 5. 管理者は受入済みのhelper・provider設定・CA・extension等を稼働中に上書きしないこと。更新はサービスを停止し、新しい世代のpath・設定を測定し再承認してから行います。DB envelopeはこれに加え、受入時のdigestを実際に読むbyte列に照合してからunwrapします。
 6. compiler、Kani/CBMC、TLC、system runtime、検証実行者とログの出所。署名は異なる鍵を示しますが、異なる人間・管理domainやログ内容の真実性を自動証明しません。
 

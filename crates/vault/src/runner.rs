@@ -334,12 +334,22 @@ pub fn launch(
         broker: 0,
         ai: ai_uid,
     };
-    let mut child = Command::new(executable)
+    #[cfg(target_os = "linux")]
+    let mut command = {
+        let mut command = Command::new(executable);
+        command.uid(identity.uid).gid(identity.uid);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new(executable);
+        vault_platform::configure_identity(&mut command, identity.uid)?;
+        command
+    };
+    let mut child = command
         .arg("isolated-worker")
         .arg("--spec")
         .arg(serde_json::to_string(&spec)?)
-        .uid(identity.uid)
-        .gid(identity.uid)
         .process_group(0)
         .current_dir(&staged.directory)
         .env_clear()
@@ -385,6 +395,7 @@ pub fn isolated_worker(spec: WorkerSpec) -> Result<()> {
         getuid().as_raw() == spec.uid
             && geteuid() == getuid()
             && getgid().as_raw() == spec.uid
+            && nix::unistd::getegid() == getgid()
             && spec.uid >= 10_000
             && spec.uid != spec.ai
             && spec.uid != spec.broker,
@@ -455,8 +466,8 @@ fn verify_worker_groups(uid: u32) -> Result<()> {
             .map(str::parse::<u32>)
             .collect::<std::result::Result<Vec<_>, _>>()?;
         ensure!(
-            !values.is_empty() && values.into_iter().all(|group| group == uid),
-            "inherited or directory group membership refused"
+            !values.is_empty() && values.iter().all(|group| *group == uid),
+            "inherited or directory group membership refused: {values:?}"
         );
     }
     Ok(())
@@ -543,14 +554,18 @@ mod tests {
         };
         let staged = bundle.stage(&base).unwrap();
         println!("PROBE: measured native bundle staged");
-        assert!(Command::new(&fixture)
+        let mut ai_probe = Command::new(&fixture);
+        #[cfg(target_os = "linux")]
+        ai_probe.uid(1000).gid(1000);
+        #[cfg(target_os = "macos")]
+        vault_platform::configure_identity(&mut ai_probe, 1000).unwrap();
+        assert!(ai_probe
             .arg("ai")
             .arg(std::process::id().to_string())
             .arg(staged.directory.join("probe"))
             .arg(&executable)
+            .arg(private_fd.as_raw_fd().to_string())
             .current_dir(&base)
-            .uid(1000)
-            .gid(1000)
             .env_clear()
             .status()
             .unwrap()

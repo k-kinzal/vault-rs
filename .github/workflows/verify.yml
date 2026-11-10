@@ -62,7 +62,8 @@ jobs:
           sudo mkdir -p /opt/vault-ci
           sudo install -m 755 target/release/vault-rs /opt/vault-ci/vault-rs
           sudo install -m 755 "$test_binary" /opt/vault-ci/vault-tests
-          sudo env VAULT_TEST_RUNNER_BIN=/opt/vault-ci/vault-rs /opt/vault-ci/vault-tests runner::tests::os_isolation_with_real_uids_and_inherited_pipe --ignored --nocapture --test-threads=1 2>&1 | tee evidence/macos/os-isolation.log
+          printf 'TESTED_BINARY_SHA256 %s\n' "$(shasum -a 256 /opt/vault-ci/vault-rs | cut -d ' ' -f1)" | tee evidence/macos/os-isolation.log
+          sudo env VAULT_TEST_RUNNER_BIN=/opt/vault-ci/vault-rs /opt/vault-ci/vault-tests runner::tests::os_isolation_with_real_uids_and_inherited_pipe --ignored --nocapture --test-threads=1 2>&1 | tee -a evidence/macos/os-isolation.log
       - name: CLI HTTPS, two subjects, restart and revocation
         timeout-minutes: 3
         run: |
@@ -70,7 +71,8 @@ jobs:
           deployment_binary=$(python3 -c 'import json; print(next(v["executable"] for line in open("/tmp/vault-deployment-build.jsonl") if (v:=json.loads(line)).get("reason")=="compiler-artifact" and v.get("target",{}).get("name")=="deployment" and v.get("executable")))')
           sudo install -m 755 target/release/examples/deployment_fixture /opt/deployment-test-helper
           sudo install -m 755 "$deployment_binary" /opt/vault-ci/deployment-tests
-          sudo env VAULT_TEST_RUNNER_BIN=/opt/vault-ci/vault-rs VAULT_TEST_MACOS_KEY_UID="$(id -u)" /opt/vault-ci/deployment-tests --ignored --nocapture --test-threads=1 2>&1 | tee evidence/macos/deployment.log
+          printf 'TESTED_BINARY_SHA256 %s\n' "$(shasum -a 256 /opt/vault-ci/vault-rs | cut -d ' ' -f1)" | tee evidence/macos/deployment.log
+          sudo env VAULT_TEST_RUNNER_BIN=/opt/vault-ci/vault-rs VAULT_TEST_MACOS_KEY_UID="$(id -u)" /opt/vault-ci/deployment-tests --ignored --nocapture --test-threads=1 2>&1 | tee -a evidence/macos/deployment.log
       - name: Verify byte-identical clean rebuild
         run: python3 scripts/check-reproducible.py 2>&1 | tee evidence/macos/clean-rebuild.log
       - name: Bind evidence to sources and binaries

@@ -151,3 +151,137 @@ Product release eligibility and a concrete deployment's acceptance must be separ
 A precise security statement is: under signature authenticity, HPKE/AEAD confidentiality and integrity, collision-resistant hashing, atomic durable serialized database transactions, linearizable independent witness CAS that the attacker cannot roll back, the documented OS account/process protections, fresh trusted time, correct key registration and independently controlled device/guardian approval, an attacker with arbitrary AI/tool-account code, token and DPoP key cannot obtain additional Vault plaintext, broaden the signed grant, consume a fresh sequence twice, or recover a static secret from a DB/WAL/envelope leak. A legitimate disclosed secret is outside the requested guarantee. Dynamic issuer plaintext exists inside the explicitly trusted issuing adapter. An attacker who controls all required signing/approval domains cannot be distinguished by another possession proof.
 
 The directly verified Rust predicates and durable-order controller support the authorization part of that statement. Integration/OS tests and source review support the adapters and isolation. They do not constitute a whole-service TLA-to-Rust simulation theorem or proofs of third-party cryptography, OS kernels or physical hardware. Physical-key experiments are explicitly excluded by the user; this does not prove non-exportability. Three distinct signer public keys prove different keys, not different humans, independence of administrative domains, hardware attestation, or the truth of signed evidence.
+
+
+---
+
+# Bounded release and native-evidence source review
+
+Reviewed commit: `a61228f50987898b4247b7f57b0be23970d764ed`.
+Reviewer: independent automated source-review agent `/root/formal_review`, 2026-11-10.
+
+Scope: runner/native working-directory changes; native C isolation fixture and Linux/macOS wiring; release evaluator, packager and GitHub workflow; adjacent collector, source fingerprint and rebuild code needed to assess evidence binding. Product source was read only. No native attack tooling, new builds, CI invocations, or interrupted security-review calls were run or retried. This report is not execution evidence. The parent reports macOS CI still running; its outcome has not been verified by this reviewer.
+
+## Findings
+
+### R-1 — Medium: Linux native suites do not exercise the packaged release binary
+
+`scripts/test-isolation.sh:6,23` builds/mounts `target/debug/vault-rs`; `scripts/test-deployment.sh:6,23` likewise mounts the debug binary. The package instead contains `target/release/vault-rs` (`scripts/package-release.py:10-24`). macOS correctly installs the release binary for native suites (`.github/workflows/verify.yml:63,65,73`).
+
+Thus Linux native isolation/deployment checks can pass while the distributed release binary has not undergone those checks. Same-source unit tests and a reproducible release build are useful but do not establish native behavior of a different optimized executable. No concrete behavior difference in the current product was demonstrated; this is an artifact-to-execution correspondence gap.
+
+Close by building and using the exact release binary in both Linux suites, recording the SHA256 of the installed executable actually tested, and checking that digest against the producer's packaged binary digest. Preserve the same all-features build configuration used for the distributed binary.
+
+### R-2 — Medium: native fixture claims FD denial without checking inherited descriptors
+
+`tools/isolation-fixture.c:25-38` checks opening the parent's `/proc/PID/fd/N` only on Linux. On macOS it explicitly ignores the supplied FD (`:27`) and checks only `task_for_pid`. Neither branch checks whether the workload already inherited the parent's open private descriptor. Yet `:75` prints a success statement including FDs denied, and the workflow advertises descriptor isolation.
+
+`runner.rs:492-499,529-536` creates and passes a real open private FD, so a direct native inheritance check is feasible. Add a check on both platforms that this descriptor is unavailable to the workload (e.g. `fcntl(fd,F_GETFD)` must fail with EBADF, or compare fstat device/inode identity while scanning the bounded descriptor range). An inherited readable descriptor bypasses file-path permissions, so Mach memory denial does not cover this case. This finding concerns missing execution evidence, not a proven descriptor leak in the product.
+
+### R-3 — Medium: native evidence accepts a zero-test successful run
+
+`release-evidence.py:42-49` accepts only the generic substring `test result: ok.` for isolation, deployment and OAuth logs. Rust's test harness reports that same text and exits zero when a filter matches no tests. Linux's collector likewise treats a zero exit as a passed native command (`verify.py:16-25`), and the evaluator checks method names/booleans rather than positive native-test evidence (`release-evidence.py:83-87`).
+
+The exact filters in the reviewed source currently name existing tests; this is not a claim that the current run skipped them. It is a fail-closed validation gap: an accidental filter/target mismatch can be recorded as completed native coverage and reach software `production_ready=true`.
+
+Require positive counts and the exact expected test name, plus explicit native probe completion markers for AI denial, authorized worker delivery, ACL denial on macOS, UID monotonicity/timeout, and CLI deployment completion. Validate that required logs occur in the digest map. A negative collector test with an authentic `0 passed` test-harness summary should be rejected. The final evaluator should enforce these conditions, not only rely on a producer's `checks_passed=true` declaration.
+
+### R-4 — Medium: direct Broker denial test accepts unrelated config failures
+
+`tools/isolation-fixture.c:53` invokes Broker using `/opt/vault-isolation/private/key` as its config. That file is intentionally unreadable to the AI UID and contains non-JSON bytes. `:56-57` accepts any normal nonzero exit except127. If the explicit Broker privilege check regressed, this command could still fail on configuration permissions/parsing and the test would report Broker invocation denied.
+
+The product's explicit root/UID check is present; no bypass was demonstrated. Close the regression-test gap by capturing and asserting the specific privilege-refusal error or by exercising a valid accessible setup with a verifiable intended denial stage. Excluding exec failure127 alone does not distinguish these failure causes.
+
+## Reviewed behavior that is sound within the stated trust boundary
+
+- `native.rs:121` sets an accessible `/` working directory for helper execution. `runner.rs:344` selects the staged, administrator-controlled directory before entering the worker. These changes address inherited inaccessible working directories without adding ambient environment variables or weakening the UID checks.
+- The C fixture invokes native OS APIs and checks errors explicitly. Linux path probes require EACCES, so nonexistent `/proc` paths do not silently pass. Mac probes target the passed live test-process PID rather than an unrelated parent PID. The test timeout/alarm turns stalls into failure rather than success.
+- GitHub `defaults.run.shell: bash` selects the platform's explicit Bash execution mode with pipefail. Combined with the script `set -euo pipefail`, failed native commands cannot be masked by a successful `tee` in the reviewed workflow. The final packaging job depends on successful Linux and macOS jobs. `if: always()` uploads failure artifacts but does not authorize the release job after failed prerequisites.
+- Actions are pinned to commit hashes. Download steps select same-workflow-run named artifacts. Source manifests are compared against the packaging checkout, and producer log hashes are checked. The packaged Linux binary is copied into the evaluator's expected path and compared to the producer's binary digest; the Mac binary is compared directly to its digest.
+- The producer uses real macOS execution checks (`platform.system() == 'Darwin'`) and does not label a cross-build as native execution. The compiled Secure Enclave helper is shipped, but physical-key experimentation remains explicitly excluded; synthetic helper tests are not hardware attestation.
+- The release decision explicitly has `decision_scope=software_release` and `deployment_accepted=false`. Packaging documentation requires actual key registration and deployment acceptance rather than pretending to create operator approval.
+
+## Remaining trust and provenance limits
+
+The validator trusts reviewed producer executions and GitHub workflow/artifact origin. Hashes detect substitution after measurement; they do not authenticate an arbitrary locally supplied manifest or establish the honesty of its producer. `package-release.py:31-37` writes a fixed 'GitHub Actions same-run artifacts' authentication description even when run locally without GitHub context; outside this exact workflow that description should be conditional or explicitly marked unverified. This observation is a provenance-label limitation, not evidence that the reviewed same-run Actions download path is wrong.
+
+The evaluator compares embedded source fingerprints recorded by the two producer binaries; it does not independently derive that fingerprint from the current tree. Its binary-to-source conclusion therefore depends on the reviewed build/collector path and trusted compiler/toolchain. Producer source-before/after checks and byte-identical rebuilds support that path but are not an independent compiler proof.
+
+OS kernel/UID/ACL/FD semantics, compiler/runtime, cryptographic primitives, independent witness persistence, correct key registration and trusted CI administration remain explicit primitive/operational contracts. This review does not certify third-party dependencies, physical hardware, live deployments, or a whole-service refinement theorem.
+
+## Source snapshot
+
+The findings above refer to the requested commit, before concurrent parent fixes. Untracked evidence output and restored vendor files were present. Digests below are computed from that exact Git commit, not the concurrently changing worktree. They are review metadata, not deployment attestations. The parent began applying fixes during this pass; those follow-up edits are not included in these dispositions.
+
+Observed HEAD: `a61228f50987898b4247b7f57b0be23970d764ed`.
+
+- `crates/vault/src/runner.rs`: `9826db4885391ddcf16973b268a6c088a82852555e58f022c353a87a6f7460e8`
+- `crates/vault/src/native.rs`: `e60b9cdb48f3c65302a2972bc757d128d13d3281ee9ac19d81b764d6a922db0d`
+- `tools/isolation-fixture.c`: `d67a139542f0f9c139601a31982ac131849a4f3c9dcacc28114a017097e5d59d`
+- `scripts/test-isolation.sh`: `ae8495d64bcaef7e69e11105a0869dd7bde70d17d21c0263db1a13dda100bea3`
+- `scripts/test-deployment.sh`: `a7bf74bf1a2a682000954cd62108a2b0b62b0a4d0c0a126c199fb22b08bb59a7`
+- `crates/vault/tests/deployment.rs`: `fdd964d0456f3b52902e8fff892934244444785a216ae7eff6114aafda51d54f`
+- `scripts/release-evidence.py`: `71e99c9cbff107b63ce1b1fe2847374ab279cf9beafaf89bdb0176057604a42e`
+- `scripts/package-release.py`: `0915b668cd789c430f0469418d7e06bcdeb3bf42c4d655b4c4eb7b2ff66db949`
+- `.github/workflows/verify.yml`: `fe940f5c6eae7d10776d2efd9b09161e7cfd66971ee616b11bed68de45a0bd39`
+- `scripts/verify.py`: `9de7e56092254c9ada23c29315ca05d49bdb20efd6e859d88faedca083ea5736`
+- `scripts/check-reproducible.py`: `46c79f2e2281908c570e372a58881ec6fb6b6548385326ff0435f84f1baeedeb`
+- `scripts/restore-vendor.py`: `43bed4bf7730649bebeb76192044560f7f5358cdd89310dd6a6cf49b295e32d5`
+- `crates/vault/build.rs`: `e5c40a9c0bc94cf2f9b2a79b6450836e06d9f61dbd067aad06f67d98cf322662`
+- `docs/review-status.json`: `bd5454be083caa428db22a0184e54a0fed1fefce2e6693f3e3a72f784add0b38`
+- `docs/REVIEW.md`: `46d954118c2d02db4ad4e887188a926072adac039b969591e4533ba82256208a`
+- `docs/ASSURANCE.md`: `bb3d21e652ee5f4aae55c99d30d4d5851a2b8489162d1ebf739f1fe5249f5f67`
+- `docs/PRODUCTION_GOAL.md`: `b6008b0528f6864779c00c9319b51f73665315d9138bb4ec1745aaa98ed2c609`
+- `.gitignore`: `020d44e9bfccc8fd06b4cf4d14b37e9c9fa9393f5ca4c9b59a2e732958cbc94b`
+
+## Source-inspected follow-up closure
+
+The parent supplied follow-up edits on top of a61228f. The reviewer inspected their actual source before recording these dispositions. **R-1 through R-4 are closed at source-review level.** No unresolved concrete defect was found within this follow-up scope under the previously stated CI/OS/toolchain trust contracts. This is not an execution certificate or a whole-service no-vulnerabilities claim.
+
+| Finding | Verified closure |
+| --- | --- |
+| R-1 | Both Linux native scripts now build `--release --all-features`, mount the release executable, and emit exactly one `TESTED_BINARY_SHA256` receipt. Mac emits the digest of its installed tested executable. `evidence_checks.native` requires a unique matching digest; both producers and the final evaluator invoke it against the packaged binary digest. |
+| R-2 | The C fixture now requires `fcntl(parent_private_fd,F_GETFD)` to fail with EBADF before either platform's memory probe. The real open descriptor number is supplied to both AI and worker probes. Mac no longer discards the descriptor argument. |
+| R-3 | Shared receipt validation now requires a positive suite count, the exact focused test name, one passed/zero failed/zero ignored, and expected native completion markers, including Mac ACL denial. Producer and aggregate paths call the same validator. The added regression-test source contains positive control and negative cases for zero tests, wrong name, missing probes, missing/wrong/repeated binary receipt and generic success. |
+| R-4 | The native AI probe captures child stderr and requires the exact Broker privilege-refusal message in addition to a normal nonzero/non127 exit. EACCES or JSON failure alone can no longer satisfy that check. |
+
+Final evaluator follow-up inspected: `release-evidence.py:89-94` now requires all 24 common Linux commands, including tool versions, vendor/format/syntax validation and advisory-DB commit, and requires every corresponding log name in the Linux digest map. All seven required macOS logs must likewise appear in its digest map. Together with the existing `verify_logs` pass, required receipts cannot be silently omitted from hash coverage.
+
+The new receipt checks are still evidence from trusted executions, not cryptographic proof that arbitrary supplied log text is truthful. Existing hash verification, unchanged-source checks and same-run workflow dependencies remain necessary.
+
+### Bounded Darwin identity primitive review
+
+Reviewed `crates/platform/src/lib.rs`, its private package manifest, workspace/dependency wiring and both call sites in `runner.rs`.
+
+- The package is macOS-only, `publish=false`, and denies unsafe code except the explicitly annotated adapter. Policy and main product retain workspace `unsafe_code=forbid`; unsafe code was not spread into the authorization kernel.
+- `configure_identity` validates the numeric UID range before registering a callback. It captures only that scalar. In the child it first verifies real/effective root identity, then short-circuit checks `setgroups(1,&gid)` -> `setgid(gid)` -> `setuid(uid)` in that order. Any failure returns the current OS error to abort spawn; no untrusted executable is intentionally reached after a failed credential transition.
+- The group pointer references one live, aligned stack `gid_t`, with count1; no foreign pointer is retained. Callback source contains no allocation, formatting, logging, locks or deliberate Rust unwind. The safety comment now correctly treats Darwin/libSystem's allocation/locking behavior as an explicit OS contract, not a POSIX guarantee for setgroups.
+- Mac worker and AI-probe commands use this adapter and do not also configure Command::uid/gid, avoiding an earlier std credential drop before the callback. Linux retains its prior std Command path.
+- The worker checks real/effective UID and GID after exec, plus its independently resolved OpenDirectory group set. The native fixture checks real/effective identities, supplemental groups, private descriptor closure, and failed root UID recovery. The production worker still separately enforces its >=10000 UID policy.
+- The temporary sudo numeric-UID worker launch is absent from the inspected final call sites. The existing native-key helper GUI-session path is a separate unchanged mechanism.
+
+This adapter is an explicit narrowly reviewed OS primitive boundary. Kani does not prove the Darwin kernel, libSystem, fork/exec machinery or absence of OS credential bugs. Native macOS execution remains necessary to establish the supported deployment behavior.
+
+### Execution evidence status
+
+This follow-up performed source inspection only. The parent reports matching-digest Linux release-binary isolation/deployment tests passed and the new adapter cross-built for Mac ARM64. This reviewer did not rerun or independently validate those logs. A cross-build is not Mac runtime evidence. The earlier a61228f Mac run cannot validate these changed source bytes; fresh same-source native CI must finish before software release acceptance.
+
+### Follow-up source digests
+
+These hashes bind the exact uncommitted follow-up worktree files inspected, on top of a61228f, before the parent appends this report and freezes the next CI commit. They supersede the earlier commit-blob hashes only for these files. Report insertion and other later edits require the normal fresh-source evidence checks.
+
+- `Cargo.toml`: `aa7c778c44a6eb222f2fd93a287add4e992558dc281dec51502e71e386aa8b68`
+- `Cargo.lock`: `4c780384a62376d58d808ab0ee70a868ba92442403a8fde1b709258826f9cca6`
+- `crates/platform/Cargo.toml`: `289a41d66326484d7e447f15c13653271fed620c52c28c36ea93b656a4fb2d07`
+- `crates/platform/src/lib.rs`: `fa7f2ece139a999de06ff90f3faac6f9cff9e4d333ef4b03a9f4f587e87bcf1d`
+- `crates/vault/Cargo.toml`: `abb5a3d078a46bcfbe81363b713ac685ebd4186c0baa8e0f2d9e179fcf04529a`
+- `crates/vault/src/runner.rs`: `3b5fa8ffe6bf2ef248f529bd0974c0fa562d6b7b74bf1f8f726eee5ca980f5ab`
+- `tools/isolation-fixture.c`: `cc4741dc610d369bd2cec9d85b6674992a261536f5e346515afe7c34770cb10f`
+- `scripts/evidence_checks.py`: `202767166da63f410940b2fd37997db409004f54f8e9113d1992bb0e1ce4c2a2`
+- `scripts/test-evidence-checks.py`: `08f06a10bdae9ee029a1849f699dc9efc99b2d1470d45eb3b0aa3fa3f3b9f5df`
+- `scripts/test-isolation.sh`: `2a5294528d95ec03705b316e1192f6caf159d6a22f3660da991e6089dd0db2ad`
+- `scripts/test-deployment.sh`: `d6b9501e74f7f8ceb02c066ccec4baaae8bbad921859273731ff90077d11b545`
+- `scripts/verify.py`: `cb7e6cf48bba5c726d65e8f2a85bd0e98afa5782a49966b7c92324792b337dcf`
+- `scripts/release-evidence.py`: `0a6c06697c406cb5bc88b45075a91ff90d1ff38a8b4174bc5a070258f6c075d2`
+- `.github/workflows/verify.yml`: `b3a48559605445f702c074e8eac0b2573107785638f86181282261b00a1441d8`
+- `docs/PROOF_CONTRACT.md`: `d5f92dc095c7918d743eb1919cef0d1b873e6acc6eff29880b6f5c20ce73267f`

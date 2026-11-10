@@ -1,6 +1,6 @@
 # Broker・承認・本番受入
 
-この手順は現在の実装契約を説明するものです。Mac／実TPMを使った完成済み運用手順ではありません。本番受入の状態はPRODUCTION_GOAL.mdとASSURANCE.mdが正本です。
+この手順はMac/Linuxの実装契約を説明します。物理鍵実験は利用者指定で除外し、実装・ソフトウェア試験・鍵登録の前提を区別します。本番受入の状態はPRODUCTION_GOAL.mdとASSURANCE.mdが正本です。
 
 ## 身元と実行物
 

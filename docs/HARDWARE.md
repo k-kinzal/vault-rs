@@ -19,7 +19,7 @@ guardianをdeviceと同じ侵害可能なOSアカウントに置くと共倒れ�
 
 Rustの`NativeKey`はcanonicalな絶対path、root所有かつgroup/other書込不可のhelperと親directory、SHA-256を検査する。環境をクリアしてhelperを起動し、stdin/stdoutの小さなJSON契約で`sign`または`ecdh`を呼ぶ。秘密鍵そのものを返すoperationはない。signはmessage全体を表示し、ECDHはrecord/storageのlabelを表示する。署名はRust側で登録公開鍵との一致も検証する。
 
-この契約はgeneric signing oracleとしてAIに公開しません。Linux helperは実UID／実効UIDがroot以外なら拒否します。Mac helperは`macos_uid`に指定した専用ログインユーザーのGUIセッションで実行します。Rust側はrootから`launchctl asuser UID sudo -n -H -u #UID -- helper`を起動し、AI UIDと鍵所有者UIDが一致した構成を拒否します。Keychainアイテムは鍵所有者のユーザー領域に保存します。AIが自分のUIDで同名の鍵を生成しても登録公開鍵と異なるため利用できません。brokerの制御入力は管理者が保持するinherited pipeだけです。Macでこの経路を実行した証跡はまだありません。
+この契約はgeneric signing oracleとしてAIに公開しません。Linux helperは実UID／実効UIDがroot以外なら拒否します。Mac helperは`macos_uid`に指定した専用ログインユーザーのGUIセッションで実行します。Rust側はrootから`launchctl asuser UID sudo -n -H -u #UID -- helper`を起動し、AI UIDと鍵所有者UIDが一致した構成を拒否します。Keychainアイテムは鍵所有者のユーザー領域に保存します。AIが自分のUIDで同名の鍵を生成しても登録公開鍵と異なるため利用できません。brokerの制御入力は管理者が保持するinherited pipeだけです。この経路のソフトウェア実行はnative CIのdeployment.logで確認し、実Secure Enclave操作の物理試験とは区別します。
 
 ### macOS
 
