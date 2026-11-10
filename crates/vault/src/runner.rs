@@ -405,16 +405,21 @@ pub fn isolated_worker(spec: WorkerSpec) -> Result<()> {
     protected_path(&spec.directory)?;
     ensure!(relative(&spec.entrypoint), "invalid entrypoint");
     protected_path(&spec.directory.join(&spec.entrypoint))?;
-    nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_CORE, 0, 0)?;
-    nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE, 64, 64)?;
+    nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_CORE, 0, 0)
+        .context("workload core limit")?;
+    nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE, 64, 64)
+        .context("workload descriptor limit")?;
     #[cfg(target_os = "linux")]
     nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_NPROC, 32, 32)?;
-    nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_CPU, 60, 60)?;
+    nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_CPU, 60, 60)
+        .context("workload CPU limit")?;
+    let address_space = worker_address_space_limit()?;
     nix::sys::resource::setrlimit(
         nix::sys::resource::Resource::RLIMIT_AS,
-        512 * 1024 * 1024,
-        512 * 1024 * 1024,
-    )?;
+        address_space,
+        address_space,
+    )
+    .context("workload address-space limit")?;
     #[cfg(target_os = "linux")]
     {
         nix::sys::prctl::set_no_new_privs()?;
@@ -433,6 +438,36 @@ pub fn isolated_worker(spec: WorkerSpec) -> Result<()> {
         .stderr(Stdio::inherit())
         .exec();
     Err(error.into())
+}
+
+fn worker_address_space_limit() -> Result<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        Ok(512 * 1024 * 1024)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // XNU rejects RLIMIT_AS below current mapped VM. dyld/runtime mappings
+        // can be hundreds of GiB without consuming that much physical memory.
+        // The sealed OS inspector reports our own virtual size in KiB; add a
+        // checked finite allowance. This is not an RSS or DoS guarantee.
+        let inspector = Path::new("/bin/ps");
+        protected_path(inspector)?;
+        let output = Command::new(inspector)
+            .args(["-o", "vsz=", "-p", &std::process::id().to_string()])
+            .env_clear()
+            .stdin(Stdio::null())
+            .output()?;
+        ensure!(
+            output.status.success() && output.stdout.len() <= 4096,
+            "virtual-memory observation failed"
+        );
+        let kib = std::str::from_utf8(&output.stdout)?.trim().parse::<u64>()?;
+        ensure!(kib > 0, "invalid virtual-memory observation");
+        kib.checked_mul(1024)
+            .and_then(|bytes| bytes.checked_add(512 * 1024 * 1024))
+            .context("virtual-memory allowance overflow")
+    }
 }
 
 fn verify_worker_groups(uid: u32) -> Result<()> {

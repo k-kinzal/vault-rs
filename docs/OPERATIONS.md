@@ -83,3 +83,5 @@ initialize-storageは既存DB／鍵envelopeを上書きせず、新しい暗号�
 Linux 配布 binary は Ubuntu 24.04 x86_64（glibc 2.39、OpenSSL 3）向けです。Mac 配布 binary は macOS 15 arm64、Homebrew OpenSSL 3 (`brew install openssl@3`) を使います。他の OS version／architecture は同じソースから再 build・再検証してください。artifact 展開後は `sha256sum -c SHA256SUMS`（Mac は `shasum -a 256 -c SHA256SUMS`）で内容を検査し、対象 binary を root 管理 path へ `install -m 755` で配置します。macOS helper は専用ユーザーの Keychain と署名・entitlement 設定が別途必要です（HARDWARE.md）。
 
 source.tar.gz は検証対象ソース一式です。Rust toolchain は rust-toolchain.toml、crate は Cargo.lock、CI action は commit SHA に固定しています。ソースを展開して git repository を初期化し、`scripts/prepare-tools.sh` と `scripts/verify.py --with-docker` で Linux 証跡を再生成できます。Mac は workflow の native 手順を実行します。再生成は新しい証跡となり、元の承認署名を引き継ぎません。
+
+リリースは `scripts/build-release.sh` に同一のfeature／target選択を集約します。ThinLTOの内部symbol／配置がキャッシュ有無で変わる診断結果に対応し、releaseではLTOを無効化しcodegen-units=1を指定します。性能最適化より同じ条件での全byte再現を優先する設定で、検査は引き続きbinary全体のSHA-256一致を要求します。

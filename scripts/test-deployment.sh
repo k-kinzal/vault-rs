@@ -3,8 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p .tools
 cc -O2 -Wall -Wextra -Werror tools/isolation-fixture.c -o .tools/isolation-fixture
-cargo build --locked -p vault-rs --release --all-features
-cargo build --locked -p vault-rs --all-features --release --example deployment_fixture
+bash scripts/build-release.sh
 cargo test --locked -p vault-rs --test deployment --no-run --message-format=json > .tools/deployment-artifacts.jsonl
 task_test_binary=$(python3 - <<'PY'
 import json

@@ -47,7 +47,7 @@ jobs:
       - name: Native Rust unit and integration tests
         run: cargo test --locked --workspace --all-features 2>&1 | tee evidence/macos/tests.log
       - name: Build installable Rust binary and software fixture
-        run: cargo build --locked --release --workspace --all-features --bins --example deployment_fixture 2>&1 | tee evidence/macos/build.log
+        run: bash scripts/build-release.sh 2>&1 | tee evidence/macos/build.log
       - name: Real OAuth authorization server
         run: bash scripts/test-oauth.sh 2>&1 | tee evidence/macos/oauth.log
       - name: Compile Secure Enclave helper

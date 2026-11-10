@@ -49,7 +49,7 @@ if a.macos_cross:run('macos-cross',['python3','scripts/check-macos-cross.py'])
 run('audit',['cargo','audit','--deny','warnings','--json'])
 audit_db=pathlib.Path.home()/'.cargo/advisory-db'
 if audit_db.exists():run('audit-db-commit',['git','-C',str(audit_db),'rev-parse','HEAD'])
-run('release-build',['cargo','build','--locked','--workspace','--all-features','--release'])
+run('release-build',['bash','scripts/build-release.sh'])
 run('clean-rebuild',['python3','scripts/check-reproducible.py'])
 run('readiness',['target/release/vault-rs','readiness'],expected=1)
 try:ready=json.loads((out/'commands/readiness.log').read_text().splitlines()[0]) if results[-1]['passed'] else {}

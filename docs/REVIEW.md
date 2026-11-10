@@ -285,3 +285,32 @@ These hashes bind the exact uncommitted follow-up worktree files inspected, on t
 - `scripts/release-evidence.py`: `0a6c06697c406cb5bc88b45075a91ff90d1ff38a8b4174bc5a070258f6c075d2`
 - `.github/workflows/verify.yml`: `b3a48559605445f702c074e8eac0b2573107785638f86181282261b00a1441d8`
 - `docs/PROOF_CONTRACT.md`: `d5f92dc095c7918d743eb1919cef0d1b873e6acc6eff29880b6f5c20ce73267f`
+
+
+## Source-only follow-up: macOS VM limits and reproducible release profile
+
+Reviewed the bounded changes on top of commit `127b3541bbc31e959f4a753bd4c52d18c70041f4`, including the final release-profile edit. No new concrete defect was found within this source-inspection scope. Earlier R-1 through R-4 remain closed at source-review level. This disposition is conditional on the previously listed trusted OS, compiler, build producer and CI-origin contracts; it is not native execution evidence or a proof that the new build is reproducible.
+
+- `runner.rs:408-422,443-470` retains Linux's 512 MiB virtual-address ceiling and obtains macOS's current worker VSZ from protected `/bin/ps`, using its own numeric PID, a cleared environment and null stdin. The observation must succeed, be at most4096 bytes, parse as a positive u64 KiB count, and survive checked multiplication/addition of512 MiB. Both hard and soft AS limits are set before executing the workload; observation or limit failure aborts. Existing identity, supplemental-group, path and descriptor checks are unchanged. This trusts Darwin's protected inspector and virtual-memory/resource-limit semantics. It guarantees neither a512 MiB RSS cap nor DoS resistance; the code and BROKER text explicitly state that distinction.
+- `tools/isolation-fixture.c:84-88` adds actual kernel `getrlimit` assertions for hard core=0, descriptor=64, CPU=60 and finite address-space limits. The existing assertions for effective identity, groups, memory/FD isolation and authorized stdin remain. Source inspection establishes the probes' presence, not their native execution or their success.
+- `scripts/build-release.sh:5` centralizes the exact workspace/all-features/release/bins/deployment-fixture build graph. Both Linux native scripts, the Linux evidence collector, the native macOS workflow and the clean rebuild now use it. This removes the reviewed graph discrepancy without weakening the tested-binary receipts or source/hash comparisons. The separate macOS cross-build diagnostic is not substituted for shipped native evidence.
+- `Cargo.toml:14-18` changes ThinLTO to `lto=false` and sets `codegen-units=1`, retaining `overflow-checks=true` and debuginfo stripping. This is a compiler optimization/reproducibility choice, not a relaxation of authorization or evidence checks. OPERATIONS documents the performance tradeoff. Its actual effect on byte equality still requires successful clean-rebuild evidence.
+- `scripts/check-reproducible.py:9-23` still hashes the complete original and clean-target executable and raises failure on any unequal byte result. New mismatch diagnostics preserve both binaries under ignored scratch space and print their embedded source fingerprints. They do not normalize sections, exclude bytes, accept matching fingerprints instead of matching binaries, or turn a mismatch into a pass. If diagnostic parsing itself fails, execution also fails. This remains same-host/toolchain reproducibility evidence, not independent compilation attestation.
+
+The parent reports that the earlier127b354 native Mac run reached the real AI isolation checks but failed during worker resource-limit setup; that run is not a pass for these modified bytes. The parent also reports that the prior equal-source ThinLTO diagnostic produced unequal executable bytes. Those failures are not superseded by this source review. At this report's completion, the new reference/clean build is still running and fresh same-source Mac native execution remains required. The reviewer ran no builds or native probes in this follow-up. Report insertion itself changes the embedded source identity and must precede the final evidence-producing builds.
+
+### Exact reviewed follow-up worktree digests
+
+These SHA-256 values bind the source bytes inspected above, on top of127b354, before parent report insertion and final CI freeze. They are review metadata, not signed attestations or binary measurements.
+
+- `Cargo.toml`: `2baa404cbc094708c553d63417425f3e347568c51671cb7125d4a739dcf0c190`
+- `crates/vault/src/runner.rs`: `e83d69059012737fb2f3aee8fa208ba54c6f5f83a8875cb149fe949a6dc523e7`
+- `tools/isolation-fixture.c`: `56739c5259d85bba7515c3670332704103f2f8cc361bd2899def8aa217a737d8`
+- `scripts/build-release.sh`: `8f57e8ee613841b0222a328e7261ebd04187dc14dc76a08192eb1051e391463c`
+- `scripts/check-reproducible.py`: `cfbeb39c9ea95f6a4b143e58bf6a6ecff314678d472a7b31c9897d9bbd1ccee9`
+- `scripts/test-isolation.sh`: `a0733449350b8b698ba6f06efac2ad79cb064b50fe2aaa6376660edc1ef2d653`
+- `scripts/test-deployment.sh`: `f4dadc7969793f010ba25a22e2da4f1743d2ed10c556c6c570b5b2d153a9fc3f`
+- `scripts/verify.py`: `e3013696539b84b6af855687ed904d246a3de0c843520ca63e1fec9243671bd9`
+- `.github/workflows/verify.yml`: `60c77b59585079b54805f908396fda0a3c705e1920b209a7c761a756d9658885`
+- `docs/BROKER.md`: `9cd82b4b65de89bb80bfe21aa54c8666755134221a1758bccf785284c5e15d82`
+- `docs/OPERATIONS.md`: `7d65f39f46a1d9ff51c2962d079ac27a4164c6aa062920602f789d2b95777da1`

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #ifdef __APPLE__
@@ -80,6 +81,11 @@ int main(int argc, char **argv) {
     assert(getuid() >= 10000 && geteuid() == getuid());
     assert(getgid() == getuid() && getegid() == getgid());
     groups();
+    struct rlimit limit;
+    assert(getrlimit(RLIMIT_CORE, &limit) == 0 && limit.rlim_max == 0);
+    assert(getrlimit(RLIMIT_NOFILE, &limit) == 0 && limit.rlim_max == 64);
+    assert(getrlimit(RLIMIT_CPU, &limit) == 0 && limit.rlim_max == 60);
+    assert(getrlimit(RLIMIT_AS, &limit) == 0 && limit.rlim_max != RLIM_INFINITY);
     assert(!getenv("VAULT_PARENT_ONLY") && !getenv("LD_PRELOAD"));
     if (!strcmp(argv[1], "worker")) {
         assert(argc == 4);
