@@ -49,6 +49,7 @@ jobs:
       - name: Compile Secure Enclave helper
         run: swiftc platform/macos/SecureEnclaveHelper.swift -o /tmp/vault-se-helper 2>&1 | tee evidence/macos/swift.log
       - name: Real UID, memory, descriptor and ACL isolation
+        timeout-minutes: 3
         run: |
           cargo test --locked -p vault-rs --lib --no-run --message-format=json > /tmp/vault-test-build.jsonl
           test_binary=$(python3 -c 'import json; print(next(v["executable"] for line in open("/tmp/vault-test-build.jsonl") if (v:=json.loads(line)).get("reason")=="compiler-artifact" and v.get("profile",{}).get("test") and v.get("executable")))')
@@ -57,6 +58,7 @@ jobs:
           sudo install -m 755 "$test_binary" /opt/vault-ci/vault-tests
           sudo env VAULT_TEST_RUNNER_BIN=/opt/vault-ci/vault-rs /opt/vault-ci/vault-tests runner::tests::os_isolation_with_real_uids_and_inherited_pipe --ignored --nocapture --test-threads=1 2>&1 | tee evidence/macos/os-isolation.log
       - name: CLI HTTPS, two subjects, restart and revocation
+        timeout-minutes: 3
         run: |
           cargo test --locked -p vault-rs --test deployment --no-run --message-format=json > /tmp/vault-deployment-build.jsonl
           deployment_binary=$(python3 -c 'import json; print(next(v["executable"] for line in open("/tmp/vault-deployment-build.jsonl") if (v:=json.loads(line)).get("reason")=="compiler-artifact" and v.get("target",{}).get("name")=="deployment" and v.get("executable")))')
