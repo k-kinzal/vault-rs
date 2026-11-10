@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     io::Write,
-    os::unix::fs::MetadataExt,
     path::PathBuf,
     process::{Command, Stdio},
 };
@@ -83,12 +82,12 @@ impl NativeKey {
             canonical == config.helper && canonical.is_absolute(),
             "native helper requires canonical absolute path"
         );
-        for p in canonical.ancestors() {
-            let m = std::fs::metadata(p)?;
-            ensure!(m.uid()==0&&m.mode()&0o022==0,"native helper and ancestors must be administrator-owned and not writable by other users");
-        }
+        crate::runner::protected_path(&canonical)?;
         ensure!(
-            hex::encode(Sha256::digest(std::fs::read(canonical)?)) == config.helper_sha256,
+            hex::encode(Sha256::digest(crate::runner::read_bounded(
+                &canonical,
+                64 * 1024 * 1024
+            )?)) == config.helper_sha256,
             "native helper digest mismatch"
         );
         Ok(Self { config })

@@ -7,9 +7,14 @@ use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
 };
 use rand::{rngs::OsRng, RngCore};
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt, path::Path};
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    path::Path,
+};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -85,6 +90,41 @@ fn label(id: Uuid) -> String {
     format!("vault-rs/v1/storage/{id}")
 }
 
+fn private_regular_file(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) => {
+            ensure!(
+                m.is_file()
+                    && !m.file_type().is_symlink()
+                    && m.nlink() == 1
+                    && m.uid() == nix::unistd::geteuid().as_raw()
+                    && m.mode() & 0o077 == 0,
+                "database files must be private, singly-linked regular files owned by this service"
+            );
+            crate::runner::reject_extended_acl(path)?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+
+fn validate_files(path: &Path) -> Result<()> {
+    for suffix in [
+        "",
+        ".lock",
+        ".key-envelope.json",
+        "-wal",
+        "-shm",
+        "-journal",
+    ] {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        private_regular_file(Path::new(&name))?;
+    }
+    Ok(())
+}
+
 pub struct Database {
     connection: Connection,
     _lease: nix::fcntl::Flock<std::fs::File>,
@@ -101,6 +141,7 @@ impl std::ops::DerefMut for Database {
     }
 }
 fn lease(path: &Path, exclusive: bool) -> Result<nix::fcntl::Flock<std::fs::File>> {
+    validate_files(path)?;
     let mut name = path.as_os_str().to_os_string();
     name.push(".lock");
     let file = OpenOptions::new()
@@ -133,6 +174,7 @@ pub fn open(path: &Path, protector: &dyn ShareUnwrapper) -> Result<Database> {
     })
 }
 fn open_unleased(path: &Path, protector: &dyn ShareUnwrapper) -> Result<Connection> {
+    validate_files(path)?;
     let mut name = path.as_os_str().to_os_string();
     name.push(".key-envelope.json");
     let envelope_path = std::path::PathBuf::from(name);
@@ -164,11 +206,9 @@ fn open_unleased(path: &Path, protector: &dyn ShareUnwrapper) -> Result<Connecti
         std::fs::File::open(path.parent().context("database needs parent directory")?)?
             .sync_all()?;
     }
-    ensure!(
-        std::fs::metadata(&envelope_path)?.len() <= 4096,
-        "oversized key envelope"
-    );
-    let envelope: Envelope = serde_json::from_slice(&std::fs::read(envelope_path)?)?;
+    private_regular_file(&envelope_path)?;
+    let envelope: Envelope =
+        serde_json::from_slice(&crate::runner::read_bounded(&envelope_path, 4096)?)?;
     ensure!(
         envelope.public_hash == wrapping_key_hash(protector.public_key())?,
         "wrong database key protector"
@@ -182,7 +222,13 @@ fn open_unleased(path: &Path, protector: &dyn ShareUnwrapper) -> Result<Connecti
             .open(path)?
             .sync_all()?;
     }
-    let db = Connection::open(path)?;
+    private_regular_file(path)?;
+    let db = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
     let version: String = db.query_row("PRAGMA cipher_version", [], |r| r.get(0))?;
     ensure!(
         !version.is_empty(),

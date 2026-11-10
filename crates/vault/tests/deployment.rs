@@ -1,5 +1,6 @@
 //! Actual CLI processes and HTTPS, with explicitly synthetic native keys in a
 //! disposable container. Never counted as physical-device or macOS execution.
+mod support;
 use p256::ecdsa::{signature::Signer, Signature, SigningKey};
 use p256::elliptic_curve::Generate;
 use serde::Serialize;
@@ -156,31 +157,7 @@ fn real_cli_services_broker_two_users_restart_and_revocation() {
     );
     let cert = root.join("tls.crt");
     let tls_key = root.join("tls.key");
-    assert!(Command::new("openssl")
-        .args([
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-days",
-            "1",
-            "-subj",
-            "/CN=localhost",
-            "-addext",
-            "subjectAltName=DNS:localhost",
-            "-addext",
-            "basicConstraints=critical,CA:FALSE",
-            "-keyout"
-        ])
-        .arg(&tls_key)
-        .arg("-out")
-        .arg(&cert)
-        .output()
-        .unwrap()
-        .status
-        .success());
-    fs::set_permissions(&tls_key, fs::Permissions::from_mode(0o600)).unwrap();
+    support::localhost_certificate(&cert, &tls_key);
     let client = reqwest::blocking::Client::builder()
         .no_proxy()
         .timeout(Duration::from_secs(3))

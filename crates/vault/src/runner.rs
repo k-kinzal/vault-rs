@@ -74,7 +74,60 @@ pub fn protected_path(path: &Path) -> Result<()> {
                 && metadata.mode() & 0o022 == 0,
             "path is not administrator-controlled"
         );
+        reject_extended_acl(part)?;
     }
+    Ok(())
+}
+
+/// POSIX mode bits include the ACL mask on Linux. Darwin ACLs are independent
+/// of those bits, so even a root-owned 0600 file can grant another user access.
+pub(crate) fn reject_extended_acl(path: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        // /bin/ls belongs to the sealed system volume (OS primitive assumption).
+        // Do not recursively call protected_path on the tool used for inspection.
+        let inspector = Path::new("/bin/ls");
+        ensure!(
+            inspector.canonicalize()? == inspector,
+            "ACL inspector symlink"
+        );
+        let m = fs::metadata(inspector)?;
+        ensure!(
+            m.is_file() && m.uid() == 0 && m.mode() & 0o022 == 0,
+            "untrusted ACL inspector"
+        );
+        let mut child = Command::new(inspector)
+            .arg("-dben")
+            .arg(path)
+            .env_clear()
+            .env("LC_ALL", "C")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let mut bytes = Vec::new();
+        child
+            .stdout
+            .take()
+            .context("ACL output missing")?
+            .take(65537)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 65536 {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("oversized ACL output");
+        }
+        ensure!(child.wait()?.success(), "ACL inspection failed");
+        let text = std::str::from_utf8(&bytes)?;
+        let mut lines = text.lines();
+        let first = lines.next().context("missing ACL result")?;
+        ensure!(
+            first.len() >= 10 && !lines.any(|line| !line.trim().is_empty()),
+            "extended ACL on protected path refused"
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = path;
     Ok(())
 }
 pub fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>> {
@@ -443,6 +496,35 @@ mod tests {
             .open(private.join("key"))
             .unwrap();
         private_fd.write_all(b"SYNTHETIC ROOT-ONLY KEY").unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            let acl_file = base.join("acl-test");
+            fs::write(&acl_file, b"synthetic").unwrap();
+            fs::set_permissions(&acl_file, fs::Permissions::from_mode(0o600)).unwrap();
+            assert!(protected_path(&acl_file).is_ok());
+            assert!(Command::new("/bin/chmod")
+                .args(["+a", "everyone allow read,write,delete"])
+                .arg(&acl_file)
+                .env_clear()
+                .status()
+                .unwrap()
+                .success());
+            assert_eq!(fs::metadata(&acl_file).unwrap().mode() & 0o077, 0);
+            assert!(
+                protected_path(&acl_file).is_err(),
+                "ACL must override apparently private POSIX permissions"
+            );
+            assert!(Command::new("/bin/chmod")
+                .arg("-N")
+                .arg(&acl_file)
+                .env_clear()
+                .status()
+                .unwrap()
+                .success());
+            assert!(protected_path(&acl_file).is_ok());
+            fs::remove_file(acl_file).unwrap();
+            println!("PASS: extended ACL bypass is refused even with root-owned 0600 mode");
+        }
         use std::os::fd::AsRawFd;
         let script = format!(
             r#"#!/usr/bin/python3

@@ -393,12 +393,12 @@ pub fn run(config_path: PathBuf) -> Result<i32> {
                     .json(&request)
                     .send()?,
             )?;
-            session.recipient.open(
+            session.recipient.open_current(
                 &config.trust,
                 &request,
                 &result,
                 decryption.as_ref(),
-                now()?,
+                now,
             )?
         }
         Action::Issue => {
@@ -413,6 +413,7 @@ pub fn run(config_path: PathBuf) -> Result<i32> {
                 .open_lease(&config.trust, &request, &record, &result, now()?)?
         }
     };
+    crate::client::ensure_current(&request, now()?)?;
     runner::launch(
         &std::env::current_exe()?,
         &staged,

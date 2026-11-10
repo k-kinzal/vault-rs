@@ -16,7 +16,6 @@ use p256::ecdsa::{signature::Verifier, Signature};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -49,14 +48,11 @@ impl HardwareModule {
         );
         // Loading a module executes native code. Only an OS-admin-controlled path
         // is allowed; signatures do not make an attacker-writable path safe.
-        for p in canonical.ancestors() {
-            let m = std::fs::metadata(p)?;
-            ensure!(
-                m.uid() == 0 && m.mode() & 0o022 == 0,
-                "PKCS#11 module and ancestors must be root-owned and not group/world writable"
-            );
-        }
-        let hash = hex::encode(Sha256::digest(std::fs::read(&canonical)?));
+        crate::runner::protected_path(&canonical)?;
+        let hash = hex::encode(Sha256::digest(crate::runner::read_bounded(
+            &canonical,
+            64 * 1024 * 1024,
+        )?));
         ensure!(hash == config.sha256, "PKCS#11 module digest mismatch");
         let context = Pkcs11::new(&canonical)?;
         context.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))?;

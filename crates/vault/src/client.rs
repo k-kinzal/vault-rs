@@ -13,6 +13,20 @@ impl Default for RecipientSession {
     }
 }
 impl RecipientSession {
+    /// Live broker path: recheck the clock after a possibly interactive unwrap.
+    /// The explicit-time `open` remains useful to deterministic offline callers.
+    pub fn open_current(
+        &self,
+        trust: &Trust,
+        request: &ReleaseRequest,
+        response: &ReleaseResponse,
+        device: &dyn ShareUnwrapper,
+        clock: impl Fn() -> Result<u64>,
+    ) -> Result<Zeroizing<Vec<u8>>> {
+        let plaintext = self.open(trust, request, response, device, clock()?)?;
+        ensure_current(request, clock()?)?;
+        Ok(plaintext)
+    }
     /// Obtain the authorized plaintext through the regular E2E gate, then create
     /// a new version under fresh independent keys. Old grants must be revoked;
     /// their signatures cannot authorize this new ciphertext/version.
@@ -96,4 +110,23 @@ impl RecipientSession {
         let device_share = unwrap_share(&response.record, "device", device)?;
         open_record(&response.record, &device_share, &guardian_array)
     }
+}
+
+/// Call again immediately before handing plaintext to a workload. Native key UI,
+/// network calls, and scheduler pauses must not reuse an earlier time snapshot.
+pub fn ensure_current(request: &ReleaseRequest, now: u64) -> Result<()> {
+    let g = &request.grant.payload;
+    let o = &request.operation;
+    ensure!(
+        vault_policy::request_period(
+            g.not_before,
+            g.expires,
+            o.not_before,
+            o.expires,
+            now,
+            MAX_REQUEST_LIFETIME
+        ),
+        "operation expired before plaintext delivery"
+    );
+    Ok(())
 }

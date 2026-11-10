@@ -1,5 +1,6 @@
 //! Software keys here are PUBLIC TEST FIXTURES. No test signer/unwrapper is linked
 //! into vault-rs binaries. These tests do not establish hardware non-extractability.
+mod support;
 use anyhow::{ensure, Result};
 use axum::{
     body::{to_bytes, Body},
@@ -1031,30 +1032,7 @@ fn real_authorization_server_code_pkce_dpop_flow() {
     let mut f = Fixture::new();
     let cert = f.dir.path().join("as.crt");
     let key = f.dir.path().join("as.key");
-    assert!(Command::new("openssl")
-        .args([
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-days",
-            "1",
-            "-subj",
-            "/CN=localhost",
-            "-addext",
-            "subjectAltName=DNS:localhost",
-            "-addext",
-            "basicConstraints=critical,CA:FALSE",
-            "-keyout"
-        ])
-        .arg(&key)
-        .arg("-out")
-        .arg(&cert)
-        .output()
-        .unwrap()
-        .status
-        .success());
+    support::localhost_certificate(&cert, &key);
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -1215,6 +1193,76 @@ fn real_authorization_server_code_pkce_dpop_flow() {
     println!("PASS: real oidc-provider HTTPS authorization code, S256 PKCE, consent, DPoP nonce, issuer/state, unused-code PKCE/key rejection, code replay, and Vault E2E release");
 }
 
+#[test]
+fn device_approval_finishing_after_deadline_cannot_deliver_plaintext() {
+    use std::sync::atomic::AtomicU64;
+    struct DelayedDevice {
+        key: Arc<TestRsa>,
+        clock: Arc<AtomicU64>,
+    }
+    impl ShareUnwrapper for DelayedDevice {
+        fn public_key(&self) -> &str {
+            self.key.public_key()
+        }
+        fn unwrap(&self, bytes: &[u8], label: &str) -> Result<Zeroizing<[u8; 32]>> {
+            let value = self.key.unwrap(bytes, label)?;
+            self.clock.fetch_add(120, Ordering::SeqCst);
+            Ok(value)
+        }
+    }
+    let f = Fixture::new();
+    let request = f.request();
+    let response = f.gate.release(&request, f.now).unwrap();
+    let clock = Arc::new(AtomicU64::new(f.now));
+    let delayed = DelayedDevice {
+        key: device(),
+        clock: clock.clone(),
+    };
+    assert!(f
+        .recipient
+        .open_current(&f.trust, &request, &response, &delayed, || Ok(
+            clock.load(Ordering::SeqCst)
+        ))
+        .is_err());
+    assert!(vault_rs::client::ensure_current(&request, request.operation.expires).is_err());
+    assert!(vault_rs::client::ensure_current(&request, f.now).is_ok());
+}
+
+#[test]
+fn database_rejects_symlinks_hardlinks_and_readable_files() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    let key = guardian();
+    for suffix in [
+        "",
+        ".lock",
+        ".key-envelope.json",
+        "-wal",
+        "-shm",
+        "-journal",
+    ] {
+        let db = dir
+            .path()
+            .join(format!("case-{}.db", suffix.replace('.', "_")));
+        let mut name = db.as_os_str().to_os_string();
+        name.push(suffix);
+        let path = std::path::PathBuf::from(name);
+        symlink(dir.path().join("nonexistent"), &path).unwrap();
+        assert!(
+            vault_rs::storage::open(&db, key.as_ref()).is_err(),
+            "symlink {suffix}"
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+    let db = dir.path().join("private.db");
+    drop(vault_rs::storage::open(&db, key.as_ref()).unwrap());
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(vault_rs::storage::open(&db, key.as_ref()).is_err());
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::hard_link(&db, dir.path().join("alias")).unwrap();
+    assert!(vault_rs::storage::open(&db, key.as_ref()).is_err());
+}
+
 #[tokio::test]
 async fn request_expiring_during_hardware_operation_never_discloses() {
     struct Slow(Arc<TestRsa>);
@@ -1277,29 +1325,7 @@ async fn real_https_roundtrip_rejects_wrong_ca_plain_http_and_replay() {
     let f = Fixture::with_audience(&origin);
     let certificate = f.dir.path().join("tls.pem");
     let private_key = f.dir.path().join("tls.key");
-    let output = std::process::Command::new("openssl")
-        .args([
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-days",
-            "1",
-            "-subj",
-            "/CN=localhost",
-            "-addext",
-            "subjectAltName=DNS:localhost",
-            "-addext",
-            "basicConstraints=critical,CA:FALSE",
-            "-keyout",
-        ])
-        .arg(&private_key)
-        .arg("-out")
-        .arg(&certificate)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
+    support::localhost_certificate(&certificate, &private_key);
     let tls = axum_server::tls_rustls::RustlsConfig::from_pem_file(&certificate, &private_key)
         .await
         .unwrap();
