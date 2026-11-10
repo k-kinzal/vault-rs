@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/policy", "crates/vault"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.91"
+license = "Apache-2.0 OR MIT"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[profile.release]
+overflow-checks = true
+lto = "thin"
+strip = "debuginfo"
+
+
+[patch.crates-io]
+libsqlite3-sys = { path = "vendor/libsqlite3-sys" }

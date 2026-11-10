@@ -1,0 +1,5 @@
+{
+  "policy": "/etc/vault-rs/acceptance-policy.json",
+  "bundle": "/etc/vault-rs/acceptance.json",
+  "logs": "/var/lib/vault-rs/evidence"
+}
