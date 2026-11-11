@@ -4,7 +4,7 @@ import AppKit
 import Foundation
 import Security
 
-struct Request: Decodable { let operation: String; let key_id: String; let data: String; let context: String }
+struct Request: Decodable { let usage: String; let operation: String; let key_id: String; let data: String; let context: String }
 struct Response: Encodable { let value: String }
 enum Failure: Error { case rejected(String) }
 func decode(_ s: String) throws -> Data {
@@ -24,11 +24,12 @@ func approve(_ request: Request, _ data: Data) throws {
     NSApplication.shared.activate(ignoringOtherApps: true)
     guard alert.runModal() == .alertSecondButtonReturn else { throw Failure.rejected("denied") }
 }
-func key(_ id: String, create: Bool) throws -> SecKey {
-    let tag = Data(("org.vault-rs.native." + id).utf8)
+func key(_ id: String, usage: String, create: Bool) throws -> SecKey {
+    let tag = Data(("org.vault-rs.native." + usage + "." + id).utf8)
     var error: Unmanaged<CFError>?
     if create {
-        guard let control = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, [.privateKeyUsage, .userPresence], &error) else { throw Failure.rejected("access control") }
+        let flags: SecAccessControlCreateFlags = usage == "interactive" ? [.privateKeyUsage, .userPresence] : [.privateKeyUsage]
+        guard let control = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, flags, &error) else { throw Failure.rejected("access control") }
         let attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
             kSecAttrKeySizeInBits as String: 256,
@@ -60,12 +61,12 @@ do {
     let input = FileHandle.standardInput.readDataToEndOfFile()
     guard input.count <= 65536 else { throw Failure.rejected("input too large") }
     let request = try JSONDecoder().decode(Request.self, from: input)
-    guard !request.key_id.isEmpty, request.key_id.count <= 128,
+    guard ["interactive", "service"].contains(request.usage), !request.key_id.isEmpty, request.key_id.count <= 128,
           request.key_id.utf8.allSatisfy({ ($0 >= 48 && $0 <= 57) || ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || $0 == 45 || $0 == 95 }),
           ["create", "public", "sign", "ecdh"].contains(request.operation) else { throw Failure.rejected("invalid operation") }
     let data = try decode(request.data)
-    if request.operation != "public" { try approve(request, data) }
-    let k = try key(request.key_id, create: request.operation == "create")
+    if request.operation == "create" || (request.usage == "interactive" && request.operation != "public") { try approve(request, data) }
+    let k = try key(request.key_id, usage: request.usage, create: request.operation == "create")
     var error: Unmanaged<CFError>?
     let output: Data
     switch request.operation {

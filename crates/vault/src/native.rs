@@ -19,6 +19,8 @@ use zeroize::{Zeroize, Zeroizing};
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct NativeConfig {
+    #[serde(default)]
+    pub usage: vault_policy::key_policy::KeyUsage,
     /// macOS GUI/keychain identity, distinct from the AI account. Linux ignores
     /// no identities: this field must be absent on Linux.
     #[serde(default)]
@@ -33,6 +35,7 @@ pub struct NativeKey {
 }
 #[derive(Serialize)]
 struct HelperRequest<'a> {
+    usage: vault_policy::key_policy::KeyUsage,
     operation: &'a str,
     key_id: &'a str,
     data: String,
@@ -49,7 +52,20 @@ impl Drop for HelperResponse {
     }
 }
 impl NativeKey {
-    pub fn open(config: NativeConfig) -> Result<Self> {
+    pub fn open_for(config: NativeConfig, role: vault_policy::key_policy::KeyRole) -> Result<Self> {
+        ensure!(
+            vault_policy::key_policy::key_allowed(
+                role,
+                config.usage,
+                config.public_key.starts_with("p256:")
+            ),
+            "native key usage or purpose does not match its role"
+        );
+        if let Some(point) = config.public_key.strip_prefix("p256:") {
+            external_kem::validate_public(&fixed::<65>(point)?)?;
+        } else {
+            parse_public(&config.public_key)?;
+        }
         #[cfg(target_os = "macos")]
         {
             let uid = config
@@ -126,6 +142,7 @@ impl NativeKey {
             .stderr(Stdio::inherit())
             .spawn()?;
         let request = HelperRequest {
+            usage: self.config.usage,
             operation,
             key_id: &self.config.key_id,
             data: encode(data),

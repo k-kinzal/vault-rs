@@ -18,19 +18,22 @@
     "helper": "/usr/local/libexec/vault-native-key",
     "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
     "key_id": "device-sign",
-    "public_key": "REPLACE_WITH_REGISTERED_PUBLIC_KEY"
+    "public_key": "REPLACE_WITH_REGISTERED_PUBLIC_KEY",
+    "usage": "interactive"
   },
   "device_decryption": {
     "helper": "/usr/local/libexec/vault-native-key",
     "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
     "key_id": "device-ecdh",
-    "public_key": "p256:REPLACE_WITH_REGISTERED_PUBLIC_KEY"
+    "public_key": "p256:REPLACE_WITH_REGISTERED_PUBLIC_KEY",
+    "usage": "interactive"
   },
   "allocator_signing": {
     "helper": "/usr/local/libexec/vault-native-key",
     "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
     "key_id": "allocator-sign",
-    "public_key": "REPLACE_WITH_REGISTERED_PUBLIC_KEY"
+    "public_key": "REPLACE_WITH_REGISTERED_PUBLIC_KEY",
+    "usage": "service"
   },
   "allocator_namespace": "00000000-0000-0000-0000-000000000002",
   "allocator_url": "https://REPLACE_WITH_DEDICATED_ALLOCATOR/v1/witness",

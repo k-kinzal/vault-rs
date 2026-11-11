@@ -13,8 +13,23 @@ use std::{io::Write, os::unix::fs::OpenOptionsExt, path::Path};
 
 /// Synthetic localhost leaf certificate, independent of the OS `openssl` CLI
 /// (macOS may ship LibreSSL with different extension encoding defaults).
+#[allow(dead_code)]
 pub fn localhost_certificate(certificate: &Path, private: &Path) {
     let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+    localhost_certificate_for_key(certificate, &key);
+    let mut output = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(private)
+        .unwrap();
+    output
+        .write_all(&key.private_key_to_pem_pkcs8().unwrap())
+        .unwrap();
+}
+
+#[allow(dead_code)]
+pub fn localhost_certificate_for_key(certificate: &Path, key: &PKey<openssl::pkey::Private>) {
     let mut name = X509NameBuilder::new().unwrap();
     name.append_entry_by_text("CN", "localhost").unwrap();
     let name = name.build();
@@ -27,7 +42,7 @@ pub fn localhost_certificate(certificate: &Path, private: &Path) {
         .unwrap();
     builder.set_subject_name(&name).unwrap();
     builder.set_issuer_name(&name).unwrap();
-    builder.set_pubkey(&key).unwrap();
+    builder.set_pubkey(key).unwrap();
     builder
         .set_not_before(&Asn1Time::days_from_now(0).unwrap())
         .unwrap();
@@ -42,15 +57,6 @@ pub fn localhost_certificate(certificate: &Path, private: &Path) {
         .build(&builder.x509v3_context(None, None))
         .unwrap();
     builder.append_extension(san).unwrap();
-    builder.sign(&key, MessageDigest::sha256()).unwrap();
-    let mut output = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(private)
-        .unwrap();
-    output
-        .write_all(&key.private_key_to_pem_pkcs8().unwrap())
-        .unwrap();
+    builder.sign(key, MessageDigest::sha256()).unwrap();
     std::fs::write(certificate, builder.build().to_pem().unwrap()).unwrap();
 }

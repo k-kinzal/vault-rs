@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::{io::Read, path::PathBuf};
 use vault_rs::crypto::*;
+use vault_rs::keys::KeyRole;
 
 #[derive(Parser)]
 #[command(
@@ -12,6 +13,13 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
+#[derive(clap::Args)]
+struct ReceiptArgs {
+    #[arg(long)]
+    receipt_key: PathBuf,
+    #[arg(long)]
+    receipt_nonce: String,
+}
 #[derive(Subcommand)]
 enum Command {
     /// Initialize an encrypted DB generation before measuring deployment acceptance.
@@ -20,6 +28,8 @@ enum Command {
         database: PathBuf,
         #[arg(long)]
         key_config: PathBuf,
+        #[command(flatten)]
+        receipt: ReceiptArgs,
     },
     /// Offline SQLCipher generation rotation; refuses while a service holds the DB.
     RotateStorage {
@@ -31,6 +41,10 @@ enum Command {
         old_key: PathBuf,
         #[arg(long)]
         new_key: PathBuf,
+        #[command(flatten)]
+        receipt: ReceiptArgs,
+        #[arg(long)]
+        source_sha256: String,
     },
     /// Re-encrypt provider/service-key configuration under a new protector.
     RewrapConfig {
@@ -42,13 +56,10 @@ enum Command {
         old_key: PathBuf,
         #[arg(long)]
         new_key: PathBuf,
-    },
-    /// Generate a service key encrypted to a hardware protector; never export the scalar.
-    GenerateServiceKey {
+        #[command(flatten)]
+        receipt: ReceiptArgs,
         #[arg(long)]
-        protector_public: PathBuf,
-        #[arg(long, value_enum)]
-        purpose: vault_rs::resident::Purpose,
+        source_sha256: String,
     },
     /// Sign a typed approval using a separately administered native key and its UI.
     Approve {
@@ -61,6 +72,26 @@ enum Command {
     Observe {
         #[arg(long)]
         config: PathBuf,
+    },
+    /// Authenticated observation from a fixed measured SNP maintenance image.
+    ObserveAttested {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        expected_envelope_sha256: String,
+        #[command(flatten)]
+        receipt: ReceiptArgs,
+    },
+    /// Verify a provisioning receipt using the operator's out-of-band intent.
+    VerifyReceipt {
+        #[arg(long)]
+        public_key: PathBuf,
+        #[arg(long)]
+        operation: String,
+        #[arg(long)]
+        nonce: String,
+        #[arg(long)]
+        output: PathBuf,
     },
     /// Hash the full workload bundle and arguments for an owner's grant.
     MeasureBundle {
@@ -117,6 +148,13 @@ enum Command {
         #[arg(long)]
         verification_run: bool,
     },
+    /// Start the independent native-key custodian for measured SNP guests.
+    Custodian {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        acceptance: PathBuf,
+    },
     /// Report assurance blockers; exits nonzero until deployment evidence exists.
     Readiness {
         #[arg(long)]
@@ -136,6 +174,7 @@ async fn main() -> Result<()> {
         Command::InitializeStorage {
             database,
             key_config,
+            receipt,
         } => {
             anyhow::ensure!(
                 nix::unistd::getuid().is_root() && nix::unistd::geteuid().is_root(),
@@ -150,13 +189,21 @@ async fn main() -> Result<()> {
                 database.is_absolute() && parent.canonicalize()? == parent,
                 "canonical absolute database path required"
             );
-            let key: vault_rs::resident::RuntimeKeyConfig =
+            let key: vault_rs::keys::RuntimeKeyConfig =
                 serde_json::from_slice(&vault_rs::runner::read_bounded(&key_config, 65536)?)?;
-            let protector = key.open()?;
+            key.require_confidential()?;
+            let protector = key.open(KeyRole::ServiceUnwrap)?;
             let digest = vault_rs::storage::initialize_generation(&database, protector.as_ref())?;
             println!(
                 "{}",
-                serde_json::json!({"database": database, "key_envelope_sha256": digest, "requires_deployment_acceptance": true})
+                serde_json::to_string(&vault_rs::provisioning::sign(
+                    "initialize-storage",
+                    &receipt.receipt_nonce,
+                    &database,
+                    digest,
+                    None,
+                    &receipt.receipt_key
+                )?)?
             );
             Ok(())
         }
@@ -165,17 +212,27 @@ async fn main() -> Result<()> {
             destination,
             old_key,
             new_key,
+            receipt,
+            source_sha256,
         } => {
             let (old, new) = rotation_keys(&source, &destination, &old_key, &new_key)?;
-            vault_rs::storage::rotate_generation(
+            let digest = vault_rs::storage::rotate_generation_checked(
                 &source,
                 &destination,
                 old.as_ref(),
                 new.as_ref(),
+                &source_sha256,
             )?;
             println!(
                 "{}",
-                serde_json::json!({"database":destination,"status":"prepared","requires_new_deployment_acceptance":true})
+                serde_json::to_string(&vault_rs::provisioning::sign(
+                    "rotate-storage",
+                    &receipt.receipt_nonce,
+                    &destination,
+                    digest,
+                    None,
+                    &receipt.receipt_key
+                )?)?
             );
             Ok(())
         }
@@ -184,11 +241,19 @@ async fn main() -> Result<()> {
             destination,
             old_key,
             new_key,
+            receipt,
+            source_sha256,
         } => {
             use std::{io::Write, os::unix::fs::OpenOptionsExt};
             let (old, new) = rotation_keys(&source, &destination, &old_key, &new_key)?;
+            use sha2::{Digest, Sha256};
+            let source_bytes = vault_rs::runner::read_bounded(&source, 100000)?;
+            anyhow::ensure!(
+                hex::encode(Sha256::digest(&source_bytes)) == source_sha256,
+                "source envelope differs from authenticated intent"
+            );
             let envelope: vault_rs::storage::ProtectedConfig =
-                serde_json::from_slice(&vault_rs::runner::read_bounded(&source, 100000)?)?;
+                serde_json::from_slice(&source_bytes)?;
             let next = envelope.rewrap(old.as_ref(), ShareUnwrapper::public_key(new.as_ref()))?;
             let _validation = next.open(new.as_ref())?;
             let mut file = std::fs::OpenOptions::new()
@@ -196,7 +261,9 @@ async fn main() -> Result<()> {
                 .create_new(true)
                 .mode(0o600)
                 .open(&destination)?;
-            file.write_all(&serde_json::to_vec(&next)?)?;
+            let bytes = serde_json::to_vec(&next)?;
+            let digest = hex::encode(Sha256::digest(&bytes));
+            file.write_all(&bytes)?;
             file.sync_all()?;
             std::fs::File::open(
                 destination
@@ -206,26 +273,14 @@ async fn main() -> Result<()> {
             .sync_all()?;
             println!(
                 "{}",
-                serde_json::json!({"envelope":destination,"status":"prepared","requires_new_deployment_acceptance":true})
-            );
-            Ok(())
-        }
-        Command::GenerateServiceKey {
-            protector_public,
-            purpose,
-        } => {
-            anyhow::ensure!(
-                nix::unistd::getuid().is_root() && nix::unistd::geteuid().is_root(),
-                "administrator enrollment required"
-            );
-            let public = std::fs::read_to_string(protector_public)?;
-            let (envelope, public_key) =
-                vault_rs::resident::ResidentKey::generate(public.trim(), purpose)?;
-            println!(
-                "{}",
-                serde_json::to_string(
-                    &serde_json::json!({"envelope":envelope,"public_key":public_key})
-                )?
+                serde_json::to_string(&vault_rs::provisioning::sign(
+                    "rewrap-config",
+                    &receipt.receipt_nonce,
+                    &destination,
+                    digest,
+                    None,
+                    &receipt.receipt_key
+                )?)?
             );
             Ok(())
         }
@@ -238,6 +293,46 @@ async fn main() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&vault_rs::readiness::observe(&config)?)?
             );
+            Ok(())
+        }
+        Command::ObserveAttested {
+            config,
+            expected_envelope_sha256,
+            receipt,
+        } => {
+            let (observed, database) =
+                vault_rs::readiness::observe_pinned(&config, &expected_envelope_sha256)?;
+            println!(
+                "{}",
+                serde_json::to_string(&vault_rs::provisioning::sign(
+                    "observe",
+                    &receipt.receipt_nonce,
+                    &database,
+                    expected_envelope_sha256,
+                    Some(observed),
+                    &receipt.receipt_key
+                )?)?
+            );
+            Ok(())
+        }
+        Command::VerifyReceipt {
+            public_key,
+            operation,
+            nonce,
+            output,
+        } => {
+            let mut bytes = Vec::new();
+            std::io::stdin().take(65537).read_to_end(&mut bytes)?;
+            anyhow::ensure!(bytes.len() <= 65536, "receipt too large");
+            let receipt: Signed<vault_rs::provisioning::Receipt> = serde_json::from_slice(&bytes)?;
+            vault_rs::provisioning::verify(
+                &receipt,
+                std::fs::read_to_string(public_key)?.trim(),
+                &operation,
+                &nonce,
+                &output,
+            )?;
+            println!("{}", serde_json::to_string(&receipt.payload)?);
             Ok(())
         }
         Command::MeasureBundle { bundle } => {
@@ -311,6 +406,25 @@ async fn main() -> Result<()> {
             );
             Ok(())
         }
+        Command::Custodian { config, acceptance } => {
+            let accepted = require_acceptance(Some(acceptance), &config, false)?.unwrap();
+            let config: vault_rs::confidential::CustodianConfig =
+                serde_json::from_slice(accepted.configuration.bytes())?;
+            config.preflight()?;
+            let listen = config.listen;
+            let tls = vault_rs::native_tls::configuration(
+                &config.certificate,
+                vault_rs::keys::RuntimeKeyConfig::Native(config.tls_signing),
+            )?;
+            let custodian = tokio::task::spawn_blocking(move || {
+                vault_rs::confidential::Custodian::open(config.origin, config.custodian_keys)
+            })
+            .await??;
+            axum_server::bind_rustls(listen, tls)
+                .serve(vault_rs::confidential::router(custodian).into_make_service())
+                .await?;
+            Ok(())
+        }
         Command::Serve {
             config,
             acceptance,
@@ -330,8 +444,8 @@ async fn main() -> Result<()> {
     }
 }
 type RuntimeKeys = (
-    Box<dyn vault_rs::resident::RuntimeKey>,
-    Box<dyn vault_rs::resident::RuntimeKey>,
+    Box<dyn vault_rs::keys::RuntimeKey>,
+    Box<dyn vault_rs::keys::RuntimeKey>,
 );
 fn rotation_keys(
     source: &std::path::Path,
@@ -355,11 +469,16 @@ fn rotation_keys(
             .parent()
             .ok_or_else(|| anyhow::anyhow!("destination parent missing"))?,
     )?;
-    let old: vault_rs::resident::RuntimeKeyConfig =
+    let old: vault_rs::keys::RuntimeKeyConfig =
         serde_json::from_slice(&vault_rs::runner::read_bounded(old, 65536)?)?;
-    let new: vault_rs::resident::RuntimeKeyConfig =
+    let new: vault_rs::keys::RuntimeKeyConfig =
         serde_json::from_slice(&vault_rs::runner::read_bounded(new, 65536)?)?;
-    Ok((old.open()?, new.open()?))
+    old.require_confidential()?;
+    new.require_confidential()?;
+    Ok((
+        old.open(KeyRole::ServiceUnwrap)?,
+        new.open(KeyRole::ServiceUnwrap)?,
+    ))
 }
 fn require_acceptance(
     path: Option<PathBuf>,
@@ -397,57 +516,12 @@ async fn run(
     verification: bool,
     accepted: Option<vault_rs::readiness::VerifiedDeployment>,
 ) -> Result<()> {
-    use serde::Deserialize;
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
+    use vault_rs::service_config::{Backend, ServiceConfig};
     use vault_rs::{
-        protocol::Trust,
-        resident::RuntimeKeyConfig,
         store::Gate,
         witness::{ProofSigner, RemoteWitness, WitnessAuthority},
     };
-    #[derive(Deserialize)]
-    #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-    enum Backend {
-        Native {
-            signing: RuntimeKeyConfig,
-            decryption: Option<RuntimeKeyConfig>,
-        },
-        #[cfg(feature = "pkcs11")]
-        Pkcs11 {
-            module: vault_rs::hardware::ModuleConfig,
-            signing: vault_rs::hardware::KeyConfig,
-            decryption: Option<vault_rs::hardware::KeyConfig>,
-        },
-    }
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct PostgresConfig {
-        connection_envelope: PathBuf,
-        ca: Option<PathBuf>,
-        policy: vault_rs::extension::ProviderPolicy,
-        extension: Option<vault_rs::extension_host::ExtensionConfig>,
-    }
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Config {
-        listen: SocketAddr,
-        certificate: PathBuf,
-        tls_key: PathBuf,
-        database: PathBuf,
-        backend: Backend,
-        #[serde(default)]
-        trust: Option<Trust>,
-        #[serde(default)]
-        witness_url: Option<String>,
-        #[serde(default)]
-        witness_public_key: Option<String>,
-        #[serde(default)]
-        witness_ca: Option<PathBuf>,
-        #[serde(default)]
-        operator_public_key: Option<String>,
-        #[serde(default)]
-        postgres: Option<PostgresConfig>,
-    }
     anyhow::ensure!(
         nix::unistd::getuid().is_root() && nix::unistd::geteuid().is_root(),
         "service requires the administrator identity, isolated from the AI account"
@@ -457,15 +531,11 @@ async fn run(
         Some(a) => a.configuration.bytes().to_vec(),
         None => vault_rs::runner::read_bounded(&path, 1_000_000)?,
     };
-    let config: Config = serde_json::from_slice(&bytes)?;
-    for protected in [&config.certificate, &config.tls_key] {
-        vault_rs::runner::protected_path(protected)?;
+    let config: ServiceConfig = serde_json::from_slice(&bytes)?;
+    if !verification {
+        config.require_confidential()?;
     }
-    use std::os::unix::fs::PermissionsExt;
-    anyhow::ensure!(
-        std::fs::metadata(&config.tls_key)?.permissions().mode() & 0o077 == 0,
-        "TLS private key must be readable only by the administrator"
-    );
+    vault_rs::runner::protected_path(&config.certificate)?;
     vault_rs::runner::protected_path(
         config
             .database
@@ -486,9 +556,7 @@ async fn run(
         !verification || listen.ip().is_loopback(),
         "verification servers must bind loopback"
     );
-    let tls =
-        axum_server::tls_rustls::RustlsConfig::from_pem_file(&config.certificate, &config.tls_key)
-            .await?;
+    let tls = vault_rs::native_tls::configuration(&config.certificate, config.tls_signing.clone())?;
     let router = tokio::task::spawn_blocking(move || -> Result<axum::Router> {
         use anyhow::Context;
         let (signer, decryption): (Box<dyn ProofSigner>, Option<Arc<dyn ShareUnwrapper>>) =
@@ -497,9 +565,12 @@ async fn run(
                     signing,
                     decryption,
                 } => (
-                    signing.open()? as Box<dyn ProofSigner>,
+                    signing.open(KeyRole::ServiceSigning)? as Box<dyn ProofSigner>,
                     decryption
-                        .map(|c| c.open().map(|k| Arc::from(k as Box<dyn ShareUnwrapper>)))
+                        .map(|c| {
+                            c.open(KeyRole::ServiceUnwrap)
+                                .map(|k| Arc::from(k as Box<dyn ShareUnwrapper>))
+                        })
                         .transpose()?,
                 ),
                 #[cfg(feature = "pkcs11")]

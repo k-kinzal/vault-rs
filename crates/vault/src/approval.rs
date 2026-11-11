@@ -37,7 +37,7 @@ pub fn approve(config: &Path, kind: Kind) -> Result<String> {
     crate::runner::protected_path(config)?;
     let native: NativeConfig =
         serde_json::from_slice(&crate::runner::read_bounded(config, 65536)?)?;
-    let key = NativeKey::open(native)?;
+    let key = NativeKey::open_for(native, vault_policy::key_policy::KeyRole::ApprovalSigning)?;
     let mut input = Vec::new();
     std::io::stdin().take(16385).read_to_end(&mut input)?;
     ensure!(input.len() <= 16384, "approval transcript too large");

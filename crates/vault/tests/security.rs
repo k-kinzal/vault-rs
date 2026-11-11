@@ -630,49 +630,36 @@ fn provider_configuration_is_encrypted_and_bound_to_its_hardware_key() {
 }
 
 #[test]
-fn resident_service_keys_unlock_once_and_enforce_purpose_and_public_key() {
-    use vault_rs::resident::{Purpose, ResidentKey};
-    for purpose in [Purpose::Signing, Purpose::Agreement] {
-        let protector = guardian();
-        let (envelope, public) = ResidentKey::generate(protector.public_key(), purpose).unwrap();
-        let key = ResidentKey::unlock(&envelope, protector.as_ref(), purpose, &public).unwrap();
-        assert_eq!(protector.calls.load(Ordering::SeqCst), 1);
-        for _ in 0..8 {
-            if purpose == Purpose::Signing {
-                let payload = Revocation {
-                    vault: Uuid::new_v4(),
-                    grant: Uuid::new_v4(),
-                };
-                let signature = key
-                    .sign_bytes(&transcript("owner-revoke", &payload).unwrap())
-                    .unwrap();
-                verify("owner-revoke", &Signed { payload, signature }, &public).unwrap();
-                assert!(key.unwrap(&[], "anything").is_err());
-            } else {
-                let wrapped = vault_rs::external_kem::wrap(
-                    &fixed::<65>(public.strip_prefix("p256:").unwrap()).unwrap(),
-                    b"test-context",
-                    &[7; 32],
-                )
-                .unwrap();
-                assert_eq!(*key.unwrap(&wrapped, "test-context").unwrap(), [7; 32]);
-                assert!(key.sign_bytes(b"forbidden signing").is_err());
-            }
-        }
-        assert_eq!(
-            protector.calls.load(Ordering::SeqCst),
-            1,
-            "service operation must not prompt/unseal again"
-        );
-        assert!(ResidentKey::unlock(&envelope, device().as_ref(), purpose, &public).is_err());
-        assert!(ResidentKey::unlock(
-            &envelope,
-            protector.as_ref(),
-            purpose,
-            "substituted public key"
-        )
-        .is_err());
-    }
+fn legacy_resident_keys_and_role_downgrades_are_rejected() {
+    use vault_rs::keys::{KeyRole, KeyUsage, RuntimeKeyConfig};
+    assert!(
+        serde_json::from_value::<RuntimeKeyConfig>(serde_json::json!({
+            "protector": {}, "envelope": "/old/key", "purpose": "signing", "public_key": "old"
+        }))
+        .is_err()
+    );
+    use vault_policy::key_policy::key_allowed;
+    assert!(key_allowed(
+        KeyRole::ServiceSigning,
+        KeyUsage::Service,
+        false
+    ));
+    assert!(key_allowed(
+        KeyRole::DeviceUnwrap,
+        KeyUsage::Interactive,
+        true
+    ));
+    assert!(!key_allowed(
+        KeyRole::ApprovalSigning,
+        KeyUsage::Service,
+        false
+    ));
+    assert!(!key_allowed(
+        KeyRole::ServiceUnwrap,
+        KeyUsage::Interactive,
+        true
+    ));
+    assert!(!key_allowed(KeyRole::TlsSigning, KeyUsage::Service, true));
 }
 
 #[test]
@@ -723,26 +710,10 @@ fn e2e_rotation_requires_current_authority_and_retires_old_grant() {
     let f = Fixture::new();
     let request = f.request();
     let response = f.gate.release(&request, f.now).unwrap();
-    use vault_rs::resident::{Purpose, ResidentKey};
-    let protector = device();
-    let (device_envelope, device_public) =
-        ResidentKey::generate(protector.public_key(), Purpose::Agreement).unwrap();
-    let (guardian_envelope, guardian_public) =
-        ResidentKey::generate(protector.public_key(), Purpose::Agreement).unwrap();
-    let new_device = ResidentKey::unlock(
-        &device_envelope,
-        protector.as_ref(),
-        Purpose::Agreement,
-        &device_public,
-    )
-    .unwrap();
-    let new_guardian = ResidentKey::unlock(
-        &guardian_envelope,
-        protector.as_ref(),
-        Purpose::Agreement,
-        &guardian_public,
-    )
-    .unwrap();
+    let new_device = SyntheticNative::new();
+    let new_guardian = SyntheticNative::new();
+    let device_public = new_device.public.clone();
+    let guardian_public = new_guardian.public.clone();
     let rotated = f
         .recipient
         .rotate_record(
@@ -790,50 +761,51 @@ fn database_commit_failure_after_witness_does_not_disclose() {
     assert!(f.gate.challenge(&f.grant, f.now).is_err());
 }
 
+use p256::elliptic_curve::sec1::ToSec1Point;
+use vault_rs::external_kem::{self, P256Agreement};
+struct SyntheticNative {
+    key: p256::SecretKey,
+    public: String,
+}
+impl SyntheticNative {
+    fn new() -> Self {
+        let key = p256::SecretKey::generate();
+        let public = format!(
+            "p256:{}",
+            encode(key.public_key().to_sec1_point(false).as_bytes())
+        );
+        Self { key, public }
+    }
+}
+impl P256Agreement for SyntheticNative {
+    fn public_sec1(&self) -> Result<[u8; 65]> {
+        fixed(self.public.strip_prefix("p256:").unwrap())
+    }
+    fn agree(&self, peer: &[u8; 65], _: &str) -> Result<Zeroizing<[u8; 32]>> {
+        let peer = p256::PublicKey::from_sec1_bytes(peer)?;
+        Ok(Zeroizing::new(
+            p256::ecdh::diffie_hellman(self.key.to_nonzero_scalar(), peer.as_affine())
+                .raw_secret_bytes()
+                .as_slice()
+                .try_into()?,
+        ))
+    }
+}
+impl ShareUnwrapper for SyntheticNative {
+    fn public_key(&self) -> &str {
+        &self.public
+    }
+    fn unwrap(&self, ct: &[u8], label: &str) -> Result<Zeroizing<[u8; 32]>> {
+        Ok(Zeroizing::new(
+            external_kem::open(self, ct, label.as_bytes(), label)?
+                .as_slice()
+                .try_into()?,
+        ))
+    }
+}
+
 #[test]
 fn native_p256_wrapping_profile_roundtrips_both_shares_and_database() {
-    use p256::elliptic_curve::sec1::ToSec1Point;
-    use vault_rs::external_kem::{self, P256Agreement};
-    struct SyntheticNative {
-        key: p256::SecretKey,
-        public: String,
-    }
-    impl SyntheticNative {
-        fn new() -> Self {
-            let key = p256::SecretKey::generate();
-            let public = format!(
-                "p256:{}",
-                encode(key.public_key().to_sec1_point(false).as_bytes())
-            );
-            Self { key, public }
-        }
-    }
-    impl P256Agreement for SyntheticNative {
-        fn public_sec1(&self) -> Result<[u8; 65]> {
-            fixed(self.public.strip_prefix("p256:").unwrap())
-        }
-        fn agree(&self, peer: &[u8; 65], _: &str) -> Result<Zeroizing<[u8; 32]>> {
-            let peer = p256::PublicKey::from_sec1_bytes(peer)?;
-            Ok(Zeroizing::new(
-                p256::ecdh::diffie_hellman(self.key.to_nonzero_scalar(), peer.as_affine())
-                    .raw_secret_bytes()
-                    .as_slice()
-                    .try_into()?,
-            ))
-        }
-    }
-    impl ShareUnwrapper for SyntheticNative {
-        fn public_key(&self) -> &str {
-            &self.public
-        }
-        fn unwrap(&self, ct: &[u8], label: &str) -> Result<Zeroizing<[u8; 32]>> {
-            Ok(Zeroizing::new(
-                external_kem::open(self, ct, label.as_bytes(), label)?
-                    .as_slice()
-                    .try_into()?,
-            ))
-        }
-    }
     let a = SyntheticNative::new();
     let b = SyntheticNative::new();
     let record = seal_record(
@@ -1636,4 +1608,43 @@ fn accepted_database_generation_is_required_before_any_unwrap() {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&envelope, std::fs::Permissions::from_mode(0o600)).unwrap();
     drop(vault_rs::storage::open_pinned(&db, protector.as_ref(), &pin).unwrap());
+}
+
+#[test]
+fn bootstrap_receipt_pin_comes_from_generated_memory_not_host_disk_reread() {
+    use sha2::{Digest, Sha256};
+    use std::sync::Mutex;
+    struct ReplacingDisk {
+        delegate: Arc<TestRsa>,
+        path: std::path::PathBuf,
+        original: Mutex<Option<String>>,
+    }
+    impl ShareUnwrapper for ReplacingDisk {
+        fn public_key(&self) -> &str {
+            self.delegate.public_key()
+        }
+        fn unwrap(&self, ciphertext: &[u8], label: &str) -> Result<Zeroizing<[u8; 32]>> {
+            let key = self.delegate.unwrap(ciphertext, label)?;
+            *self.original.lock().unwrap() =
+                Some(hex::encode(Sha256::digest(std::fs::read(&self.path)?)));
+            // Model an adversarial state disk changing after the initial read.
+            std::fs::write(&self.path, b"host substituted envelope after unwrap")?;
+            Ok(key)
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let database = dir.path().join("bootstrap.db");
+    let envelope = dir.path().join("bootstrap.db.key-envelope.json");
+    let protector = ReplacingDisk {
+        delegate: guardian(),
+        path: envelope.clone(),
+        original: Mutex::new(None),
+    };
+    let pin = vault_rs::storage::initialize_generation(&database, &protector).unwrap();
+    assert_eq!(Some(pin.clone()), *protector.original.lock().unwrap());
+    assert_ne!(
+        pin,
+        hex::encode(Sha256::digest(std::fs::read(&envelope).unwrap()))
+    );
+    assert!(vault_rs::storage::open_pinned(&database, protector.delegate.as_ref(), &pin).is_err());
 }

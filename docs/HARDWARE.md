@@ -27,7 +27,7 @@ This contract is not exposed to the AI as a generic signing oracle. The Linux he
 swiftc platform/macos/SecureEnclaveHelper.swift -o SecureEnclaveHelper
 ```
 
-An administrator defines signing, entitlements, and the keychain access group, then installs the helper at a protected path. Do not treat casual ad-hoc codesigning as a production trust anchor. JSON `{operation:"create",key_id:"device-sign",data:"",context:"..."}` creates a SecKey; actual input requires valid JSON quoting. The public key is 65-byte SEC1. For encryption configuration, encode it as `p256:` plus base64url; for signing, convert it to compressed 33-byte SEC1.
+An administrator defines signing, entitlements, and the keychain access group, then installs the helper at a protected path. Do not treat casual ad-hoc codesigning as a production trust anchor. JSON `{usage:"interactive",operation:"create",key_id:"device-sign",data:"",context:"..."}` creates a SecKey; actual input requires valid JSON quoting. The public key is 65-byte SEC1. For encryption configuration, encode it as `p256:` plus base64url; for signing, convert it to compressed 33-byte SEC1.
 
 The helper supports `public`, `sign`, and `ecdh`, and requests user confirmation during creation as well. Prompt reuse, locking, and access-control behavior are not guaranteed until tested on a physical device. Trusted transaction display on an external screen and an XPC service remain future work.
 
@@ -41,11 +41,11 @@ The current helper can only be invoked by the root-managed broker. Do not place 
 
 `platform/linux/enroll-tpm.py` enrolls keys under an existing persistent parent prepared by the administrator. It displays a strong random authorization value once on `/dev/tty` and asks for confirmation that it was saved. Only public information is returned on stdout; existing keys and parents are not overwritten. It targets a real TPM and has not yet been run on physical hardware.
 
-The helper currently displays the operation on `/dev/tty` and interactively requests a PIN. Temporary authentication files are created in tmpfs with mode 0600 and deleted at exit. Complete memory zeroization inside Python or TPM utilities is not guaranteed. Unattended services use resident keys unlocked at startup; see [OPERATIONS.md](OPERATIONS.md). Owner/device/guardian interactive approval remains separate. Do not automate it through PIN environment injection.
+The helper currently displays the operation on `/dev/tty` and interactively requests a PIN. Temporary authentication files are created in tmpfs with mode 0600 and deleted at exit. Complete memory zeroization inside Python or TPM utilities is not guaranteed. Unattended service handles use PCR plus exact-command policy on Linux, or a separate Secure Enclave service namespace on macOS; see [CONFIDENTIAL_DEPLOYMENT.md](CONFIDENTIAL_DEPLOYMENT.md). No resident-scalar fallback is available. Owner/device/guardian interactive approval remains separate. Do not automate it through PIN environment injection.
 
 ### PKCS#11
 
-Pin the module by a root-managed path and digest. Require a hardware slot, token serial, and protected authentication path. Private-key attributes must be Sensitive/AlwaysSensitive/Local/NeverExtractable=true and Extractable=false. Authenticate each fresh session. Context-specific login for `AlwaysAuthenticate=true` keys is not implemented, so those keys are rejected. These attributes are assertions by a trusted module, not remote attestation.
+Direct PKCS#11 service configurations are rejected by the confidential production profile. The optional library backend remains available for isolated verification. Pin its module by a root-managed path and digest. Require a hardware slot, token serial, and protected authentication path. Private-key attributes must be Sensitive/AlwaysSensitive/Local/NeverExtractable=true and Extractable=false. Authenticate each fresh session. Context-specific login for `AlwaysAuthenticate=true` keys is not implemented, so those keys are rejected. These attributes are assertions by a trusted module, not remote attestation.
 
 ## Physical-key experiments
 

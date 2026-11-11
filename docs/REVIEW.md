@@ -351,3 +351,28 @@ These values identify source bytes, not binaries or signed attestations.
 ### Parent native-CI follow-up: executable-only linker option
 
 Native run 94eee0f failed at host proc-macro loading when the no-UUID option was applied through global RUSTFLAGS; it did not produce accepted release evidence. The parent restricted that option in crates/vault/build.rs to the vault-rs binary, leaving host compiler plugins untouched, and added an early native executable loader probe. The independent review above remains a source-scoped report, not certification of this later compiler compatibility fix. Fresh same-source native tests and full-byte rebuild equality remain mandatory.
+
+
+## Confidential-service profile review (November 11, 2026)
+
+The baseline resident-scalar architecture is superseded. The separate reviewer
+recorded the initial obligations in [MEMORY_GUARANTEE_REVIEW.md](reviews/MEMORY_GUARANTEE_REVIEW.md),
+the SNP verifier pass in [SNP_REVIEW.md](reviews/SNP_REVIEW.md), and bounded RPC,
+image, startup and provisioning findings/closures in
+[CONFIDENTIAL_INTEGRATION_REVIEW.md](reviews/CONFIDENTIAL_INTEGRATION_REVIEW.md).
+C1–C4 in the latter report are source-closed. Reviewer identity is a separate agent
+context, not an independent person or certification authority.
+
+The implementer addressed SNP S1 with iff/nonvacuity proofs and actual-source
+mutations (including deny-all attestation). S2 uses an explicit offline
+endorsement/revocation-review contract, enforced maximum 24-hour approval, and
+no claim of immediate CRL detection. S3 now calls a shared actual-byte binding
+predicate; vendor-field projection, report parsing and cryptography remain
+reviewed/tested primitive adapters, not a mechanized end-to-end refinement.
+These boundaries are stated affirmatively and narrowly in GUARANTEES.md.
+
+Final verification logs, rather than this review narrative, determine test/proof
+counts and execution success. No physical SNP, TPM or Secure Enclave experiment
+was performed by the reviewer. Kernel/OVMF build correspondence, trusted time,
+independent custody/witness and an actual deployment's fresh attestation remain
+explicit deployment obligations.

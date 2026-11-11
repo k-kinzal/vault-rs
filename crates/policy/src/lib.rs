@@ -1,6 +1,8 @@
 //! The executable reference monitor. No IO, allocations, crypto, clocks, or unsafe.
 //! Evidence booleans MUST be supplied by trusted verification, never by a caller.
 #![no_std]
+pub mod attestation;
+pub mod key_policy;
 mod scope;
 pub mod wire;
 

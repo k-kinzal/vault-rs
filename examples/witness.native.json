@@ -1,22 +1,30 @@
 {
-  "listen": "127.0.0.1:9443",
-  "certificate": "/etc/vault-rs/witness.crt",
-  "tls_key": "/etc/vault-rs/witness.key",
-  "database": "/var/lib/vault-rs/witness.db",
+  "listen": "0.0.0.0:9443",
+  "certificate": "/etc/vault/witness.crt",
+  "database": "/state/witness.db",
   "backend": {
     "kind": "native",
     "signing": {
-      "helper": "/usr/local/libexec/vault-native-key",
-      "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
+      "kind": "snp",
+      "endpoint": "https://REPLACE_WITH_INDEPENDENT_CUSTODIAN/",
+      "ca": "/etc/vault/custodian-ca.pem",
       "key_id": "witness-sign",
       "public_key": "REPLACE_WITH_BASE64URL_COMPRESSED_P256_PUBLIC_KEY"
     },
     "decryption": {
-      "helper": "/usr/local/libexec/vault-native-key",
-      "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
+      "kind": "snp",
+      "endpoint": "https://REPLACE_WITH_INDEPENDENT_CUSTODIAN/",
+      "ca": "/etc/vault/custodian-ca.pem",
       "key_id": "witness-storage",
       "public_key": "p256:REPLACE_WITH_BASE64URL_UNCOMPRESSED_P256_PUBLIC_KEY"
     }
   },
-  "operator_public_key": "REPLACE_WITH_PINNED_VAULT_OPERATOR_KEY"
+  "operator_public_key": "REPLACE_WITH_PINNED_VAULT_OPERATOR_KEY",
+  "tls_signing": {
+    "kind": "snp",
+    "endpoint": "https://REPLACE_WITH_INDEPENDENT_CUSTODIAN/",
+    "ca": "/etc/vault/custodian-ca.pem",
+    "key_id": "witness-tls",
+    "public_key": "REPLACE_WITH_BASE64URL_COMPRESSED_P256_PUBLIC_KEY"
+  }
 }

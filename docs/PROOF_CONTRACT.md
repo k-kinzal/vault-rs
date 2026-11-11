@@ -1,5 +1,8 @@
 # Machine verification and implementation correspondence
 
+The current confidential-service profile and exact affirmative guarantees are defined in [GUARANTEES.md](GUARANTEES.md). Mac/Linux brokers use the same independent Linux SNP service. Host-memory protection excludes the independently trusted key custodian, guest kernel/application compromise and the other explicit primitive contracts there. Prior resident-key evidence does not cover this stronger profile.
+
+
 The proof targets are `crates/policy/src/lib.rs` and `wire.rs`, which the product uses directly. Under the contracts below for cryptographic, OS, and database primitives, verification covers authorization decisions, field correspondence, and disclosure ordering. Proven properties, finite exploration, execution tests, and trusted primitives are distinguished.
 
 ## Production code checked directly

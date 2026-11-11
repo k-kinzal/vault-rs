@@ -31,4 +31,4 @@ def native(text, kind, digest, macos=False):
     else:
         assert kind == 'deployment', 'unknown native check'
         single(text, 'real_cli_services_broker_two_users_restart_and_revocation',
-               ['PASS: real CLI HTTPS witness/Vault/broker; two subjects; isolated private-pipe workload; resident service keys; independent process restart; no restored uses; owner revocation. SOFTWARE KEY FIXTURE ONLY.'])
+               ['PASS: real CLI HTTPS witness/Vault/broker; two subjects; isolated private-pipe workload; native-handle service and TLS signing; independent process restart; no restored uses; owner revocation. SOFTWARE KEY FIXTURE ONLY.'])

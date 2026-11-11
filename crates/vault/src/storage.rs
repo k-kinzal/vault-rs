@@ -194,6 +194,16 @@ fn open_unleased(
     protector: &dyn ShareUnwrapper,
     expected: Option<&str>,
 ) -> Result<Connection> {
+    Ok(open_unleased_with_pin(path, protector, expected, false)?.0)
+}
+fn open_unleased_with_pin(
+    path: &Path,
+    protector: &dyn ShareUnwrapper,
+    expected: Option<&str>,
+    create_only: bool,
+) -> Result<(Connection, String)> {
+    use sha2::{Digest, Sha256};
+    let mut expected = expected.map(str::to_owned);
     validate_files(path)?;
     let mut name = path.as_os_str().to_os_string();
     name.push(".key-envelope.json");
@@ -201,6 +211,10 @@ fn open_unleased(
     ensure!(
         expected.is_none() || envelope_path.exists(),
         "accepted database generation is missing"
+    );
+    ensure!(
+        !create_only || !envelope_path.exists(),
+        "bootstrap generation already exists"
     );
     if !envelope_path.exists() {
         ensure!(
@@ -225,17 +239,19 @@ fn open_unleased(
             .create_new(true)
             .mode(0o600)
             .open(&envelope_path)?;
-        file.write_all(&serde_json::to_vec(&envelope)?)?;
+        let generated = serde_json::to_vec(&envelope)?;
+        expected = Some(hex::encode(Sha256::digest(&generated)));
+        file.write_all(&generated)?;
         file.sync_all()?;
         std::fs::File::open(path.parent().context("database needs parent directory")?)?
             .sync_all()?;
     }
     private_regular_file(&envelope_path)?;
     let bytes = crate::runner::read_bounded(&envelope_path, 4096)?;
+    let actual_pin = hex::encode(Sha256::digest(&bytes));
     if let Some(expected) = expected {
-        use sha2::{Digest, Sha256};
         ensure!(
-            hex::encode(Sha256::digest(&bytes)) == expected,
+            actual_pin == expected,
             "database key generation differs from accepted manifest"
         );
     }
@@ -274,7 +290,7 @@ fn open_unleased(
     db.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
         r.get::<_, i64>(0)
     })?;
-    Ok(db)
+    Ok((db, actual_pin))
 }
 
 // Resolve system directory aliases (not the DB leaf). SQLite's NOFOLLOW
@@ -296,16 +312,13 @@ pub fn initialize_generation(path: &Path, protector: &dyn ShareUnwrapper) -> Res
     let envelope = std::path::PathBuf::from(envelope);
     ensure!(!envelope.exists(), "database generation already exists");
     let _lease = lease(path, true)?;
-    let db = open_unleased(path, protector, None)?;
+    let (db, pin) = open_unleased_with_pin(path, protector, None, true)?;
     // Forces an encrypted first page without introducing application tables.
     db.execute_batch("PRAGMA user_version=1")?;
     drop(db);
     std::fs::File::open(path)?.sync_all()?;
     std::fs::File::open(path.parent().context("database parent missing")?)?.sync_all()?;
-    use sha2::{Digest, Sha256};
-    Ok(hex::encode(Sha256::digest(crate::runner::read_bounded(
-        &envelope, 4096,
-    )?)))
+    Ok(pin)
 }
 
 /// Offline generation rotation. The old database remains an immutable recovery
@@ -316,23 +329,44 @@ pub fn rotate_generation(
     destination: &Path,
     old: &dyn ShareUnwrapper,
     new: &dyn ShareUnwrapper,
-) -> Result<()> {
+) -> Result<String> {
+    rotate_generation_inner(source, destination, old, new, None)
+}
+pub fn rotate_generation_checked(
+    source: &Path,
+    destination: &Path,
+    old: &dyn ShareUnwrapper,
+    new: &dyn ShareUnwrapper,
+    expected_source: &str,
+) -> Result<String> {
+    rotate_generation_inner(source, destination, old, new, Some(expected_source))
+}
+fn rotate_generation_inner(
+    source: &Path,
+    destination: &Path,
+    old: &dyn ShareUnwrapper,
+    new: &dyn ShareUnwrapper,
+    expected_source: Option<&str>,
+) -> Result<String> {
     ensure!(
         source != destination && source.exists() && !destination.exists(),
         "rotation requires a new database generation"
     );
     let _source_lease = lease(source, true)?;
     let _destination_lease = lease(destination, true)?;
-    let source_db = open_unleased(source, old, None)?;
+    let source_db = open_unleased(source, old, expected_source)?;
     source_db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
-    let destination_db = open_unleased(destination, new, None)?;
+    let (destination_db, pin) = open_unleased_with_pin(destination, new, None, true)?;
     drop(destination_db);
     let mut name = destination.as_os_str().to_os_string();
     name.push(".key-envelope.json");
-    let envelope: Envelope = serde_json::from_slice(&crate::runner::read_bounded(
-        &std::path::PathBuf::from(name),
-        4096,
-    )?)?;
+    let bytes = crate::runner::read_bounded(&std::path::PathBuf::from(name), 4096)?;
+    use sha2::{Digest, Sha256};
+    ensure!(
+        hex::encode(Sha256::digest(&bytes)) == pin,
+        "new generation changed during rotation"
+    );
+    let envelope: Envelope = serde_json::from_slice(&bytes)?;
     let key = new.unwrap(&decode(&envelope.wrapped)?, &label(envelope.id))?;
     let raw = Zeroizing::new(hex::encode(key.as_ref()));
     let password = Zeroizing::new(format!("x'{}'", raw.as_str()));
@@ -348,7 +382,7 @@ pub fn rotate_generation(
     source_db.query_row("SELECT sqlcipher_export('rotated')", [], |_| Ok(()))?;
     source_db.execute_batch("DETACH DATABASE rotated")?;
     drop(source_db);
-    let verified = open_unleased(destination, new, None)?;
+    let verified = open_unleased(destination, new, Some(&pin))?;
     let integrity: String = verified.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     ensure!(
         integrity == "ok",
@@ -357,5 +391,5 @@ pub fn rotate_generation(
     drop(verified);
     std::fs::File::open(destination)?.sync_all()?;
     std::fs::File::open(destination.parent().context("missing rotation parent")?)?.sync_all()?;
-    Ok(())
+    Ok(pin)
 }

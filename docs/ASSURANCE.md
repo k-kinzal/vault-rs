@@ -1,5 +1,8 @@
 # Assurance scope and evidence
 
+The current confidential-service profile and exact affirmative guarantees are defined in [GUARANTEES.md](GUARANTEES.md). Mac/Linux brokers use the same independent Linux SNP service. Host-memory protection excludes the independently trusted key custodian, guest kernel/application compromise and the other explicit primitive contracts there. Prior resident-key evidence does not cover this stronger profile.
+
+
 The product's production decision is `decision_scope=software_release` in `evidence/release.json`. Acceptance of a specific deployment is `decision_scope=deployment` from the actual `readiness` CLI. Product acceptance requires all Linux checks and software tests on real macOS for the same source. Deployment signatures are not generated automatically. Only physical-key experiments are excluded at the requester's direction.
 
 ## Goals and supporting evidence

@@ -51,6 +51,7 @@ impl ConfigurationSnapshot {
                                     | "tls_key"
                                     | "ca"
                                     | "witness_ca"
+                                    | "vcek"
                                     | "allocator_ca"
                                     | "helper"
                                     | "envelope"
@@ -227,7 +228,8 @@ pub struct AuthorityPolicy {
     pub minimum_epoch: u64,
     pub maximum_age_seconds: u64,
 }
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Observed {
     pub source_sha256: String,
     pub binary_sha256: String,
@@ -392,6 +394,16 @@ pub fn verify_acceptance(
 pub fn observe(config: &Path) -> Result<Observed> {
     observe_snapshot(&ConfigurationSnapshot::read(config)?)
 }
+pub fn observe_pinned(config: &Path, expected: &str) -> Result<(Observed, PathBuf)> {
+    let snapshot = ConfigurationSnapshot::read(config)?;
+    let service: crate::service_config::ServiceConfig = serde_json::from_slice(snapshot.bytes())?;
+    service.require_confidential()?;
+    ensure!(
+        snapshot.database_generation(&service.database)? == expected,
+        "generation differs from authenticated bootstrap receipt"
+    );
+    Ok((observe_snapshot(&snapshot)?, service.database))
+}
 fn observe_snapshot(config: &ConfigurationSnapshot) -> Result<Observed> {
     #[cfg(target_os = "linux")]
     let (platform, host) = (
@@ -464,6 +476,11 @@ pub fn check_configuration(files: &AcceptanceFiles, config: &Path) -> Result<Ver
         .expires
         .min(bundle.review.payload.expires)
         .min(bundle.deployment.payload.expires);
+    crate::service_config::preflight(configuration.bytes())?;
+    ensure!(
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() < deadline,
+        "deployment acceptance expired during live preflight"
+    );
     Ok(VerifiedDeployment {
         deadline,
         configuration,

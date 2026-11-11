@@ -47,6 +47,37 @@ with tempfile.TemporaryDirectory() as work:
                 tpm("tpm2_sign","-c","sign.ctx","-g","sha256","-s","ecdsa","-f","plain","-p","wrong-pin","-o","wrong","message",success=False)
                 print("PASS: TPM ECDSA DER signature and wrong-PIN rejection")
             tpm("tpm2_flushcontext","-t")
+        # Unattended service handles require both measured PCR state and the
+        # exact TPM command; empty-password authorization must not bypass policy.
+        for role, attrs, code in [("sign", "sign", "TPM2_CC_Sign"), ("ecdh", "decrypt", "TPM2_CC_ECDH_ZGen")]:
+            tpm("tpm2_startauthsession", "-S", "trial.ctx")
+            tpm("tpm2_policypcr", "-S", "trial.ctx", "-l", "sha256:7")
+            tpm("tpm2_policycommandcode", "-S", "trial.ctx", "-L", "policy.bin", code)
+            tpm("tpm2_flushcontext", "trial.ctx")
+            tpm("tpm2_create", "-C", "0x81000001", "-G", "ecc256", "-a", f"fixedtpm|fixedparent|sensitivedataorigin|adminwithpolicy|{attrs}", "-L", "policy.bin", "-u", "service.pub", "-r", "service.priv")
+            tpm("tpm2_load", "-C", "0x81000001", "-u", "service.pub", "-r", "service.priv", "-c", "service.ctx")
+            def operation(auth, success=True):
+                if role == "sign":
+                    return tpm("tpm2_sign", "-c", "service.ctx", "-g", "sha256", "-s", "ecdsa", "-f", "plain", "-p", auth, "-o", "service.out", "message", success=success)
+                return tpm("tpm2_ecdhzgen", "-c", "service.ctx", "-u", "point.bin", "-p", auth, "-o", "service.out", success=success)
+            operation("", success=False)
+            tpm("tpm2_flushcontext", "-t")
+            for changed in [False, True]:
+                if changed:
+                    tpm("tpm2_pcrextend", "7:sha256=" + "11" * 32)
+                tpm("tpm2_load", "-C", "0x81000001", "-u", "service.pub", "-r", "service.priv", "-c", "service.ctx")
+                tpm("tpm2_startauthsession", "--policy-session", "-S", "policy.ctx")
+                tpm("tpm2_policypcr", "-S", "policy.ctx", "-l", "sha256:7")
+                tpm("tpm2_policycommandcode", "-S", "policy.ctx", code)
+                operation("session:policy.ctx", success=not changed)
+                # ECDH_ZGen may consume the policy session. Clear any surviving
+                # simulator session; production uses only its own session handle.
+                tpm("tpm2_flushcontext", "-s")
+                tpm("tpm2_flushcontext", "-l")
+                tpm("tpm2_flushcontext", "-t")
+            tpm("tpm2_flushcontext", "-s")
+            tpm("tpm2_flushcontext", "-l")
+            print("PASS: service TPM " + role + " PCR policy; empty authorization and changed PCR rejected")
         print("SIMULATION ONLY: no physical non-extractability or theft claim")
     finally:
         sim.terminate()

@@ -18,9 +18,9 @@ use std::{
 use uuid::Uuid;
 use vault_rs::{
     crypto::*,
+    keys::{KeyUsage, RuntimeKeyConfig},
     native::NativeConfig,
     protocol::*,
-    resident::{Purpose, ResidentConfig, ResidentKey, RuntimeKeyConfig},
     runner::{Bundle, BundleFile},
 };
 
@@ -56,25 +56,6 @@ fn jwt(value: &AccessClaims, key: &SigningKey) -> String {
     );
     let sig: Signature = key.sign(input.as_bytes());
     format!("{input}.{}", encode(&sig.to_bytes()))
-}
-fn service_key(
-    root: &Path,
-    name: &str,
-    protector: NativeConfig,
-    purpose: Purpose,
-) -> (RuntimeKeyConfig, String) {
-    let (envelope, public_key) = ResidentKey::generate(&protector.public_key, purpose).unwrap();
-    let path = root.join(format!("{name}.envelope.json"));
-    write(&path, &envelope);
-    (
-        RuntimeKeyConfig::Resident(ResidentConfig {
-            protector,
-            envelope: path,
-            purpose,
-            public_key: public_key.clone(),
-        }),
-        public_key,
-    )
 }
 fn start(
     binary: &Path,
@@ -137,39 +118,33 @@ fn real_cli_services_broker_two_users_restart_and_revocation() {
     use sha2::{Digest, Sha256};
     let helper_hash = hex::encode(Sha256::digest(fs::read(&helper).unwrap()));
     let native = |id: &str, usage: &str| NativeConfig {
+        usage: if id == "device" {
+            KeyUsage::Interactive
+        } else {
+            KeyUsage::Service
+        },
         macos_uid: key_uid,
         helper: helper.clone(),
         helper_sha256: helper_hash.clone(),
         key_id: id.into(),
         public_key: keys[id][usage].as_str().unwrap().into(),
     };
-    let (gate_signing, gate_signing_public) = service_key(
-        &root,
-        "gate-signing",
-        native("gate", "agreement"),
-        Purpose::Signing,
-    );
-    let (gate_decryption, gate_decryption_public) = service_key(
-        &root,
-        "gate-decryption",
-        native("gate", "agreement"),
-        Purpose::Agreement,
-    );
-    let (witness_signing, witness_public) = service_key(
-        &root,
-        "witness-signing",
-        native("witness", "agreement"),
-        Purpose::Signing,
-    );
-    let (witness_decryption, _) = service_key(
-        &root,
-        "witness-decryption",
-        native("witness", "agreement"),
-        Purpose::Agreement,
-    );
+    let gate_signing = RuntimeKeyConfig::Native(native("gate", "signing"));
+    let gate_signing_public = gate_signing.public_key().to_owned();
+    let gate_decryption = RuntimeKeyConfig::Native(native("gate", "agreement"));
+    let gate_decryption_public = gate_decryption.public_key().to_owned();
+    let witness_signing = RuntimeKeyConfig::Native(native("witness", "signing"));
+    let witness_public = witness_signing.public_key().to_owned();
+    let witness_decryption = RuntimeKeyConfig::Native(native("witness", "agreement"));
+    let tls_signing = RuntimeKeyConfig::Native(native("tls", "signing"));
     let cert = root.join("tls.crt");
-    let tls_key = root.join("tls.key");
-    support::localhost_certificate(&cert, &tls_key);
+    use p256::pkcs8::EncodePrivateKey;
+    let tls_fixture =
+        p256::SecretKey::from_slice(&fs::read(root.join("tls.fixture-key")).unwrap()).unwrap();
+    let tls_fixture =
+        openssl::pkey::PKey::private_key_from_der(tls_fixture.to_pkcs8_der().unwrap().as_bytes())
+            .unwrap();
+    support::localhost_certificate_for_key(&cert, &tls_fixture);
     let client = reqwest::blocking::Client::builder()
         .no_proxy()
         .timeout(Duration::from_secs(3))
@@ -194,11 +169,11 @@ fn real_cli_services_broker_two_users_restart_and_revocation() {
     let vc = root.join("vault.json");
     write(
         &wc,
-        &json!({"listen":format!("127.0.0.1:{wp}"),"certificate":cert,"tls_key":tls_key,"database":root.join("witness.db"),"backend":{"kind":"native","signing":witness_signing,"decryption":witness_decryption},"operator_public_key":gate_signing_public}),
+        &json!({"listen":format!("127.0.0.1:{wp}"),"certificate":cert,"tls_signing":tls_signing,"database":root.join("witness.db"),"backend":{"kind":"native","signing":witness_signing,"decryption":witness_decryption},"operator_public_key":gate_signing_public}),
     );
     write(
         &vc,
-        &json!({"listen":format!("127.0.0.1:{vp}"),"certificate":cert,"tls_key":tls_key,"database":root.join("vault.db"),"backend":{"kind":"native","signing":gate_signing,"decryption":gate_decryption},"trust":trust,"witness_url":format!("{wo}/v1/witness"),"witness_public_key":witness_public,"witness_ca":cert}),
+        &json!({"listen":format!("127.0.0.1:{vp}"),"certificate":cert,"tls_signing":tls_signing,"database":root.join("vault.db"),"backend":{"kind":"native","signing":gate_signing,"decryption":gate_decryption},"trust":trust,"witness_url":format!("{wo}/v1/witness"),"witness_public_key":witness_public,"witness_ca":cert}),
     );
     // The normal launch must not mistake synthetic software evidence for acceptance.
     assert!(!Command::new(&binary)
@@ -340,16 +315,17 @@ fn real_cli_services_broker_two_users_restart_and_revocation() {
         grants.push(grant);
     }
     let calls = fs::read_to_string(root.join("calls.log")).unwrap();
-    // Service keys remain resident: after startup only each broker's device sign
-    // and ECDH plus allocator startup-unlock reach the native fixture.
+    // Every service operation, including TLS signing, reaches its native handle.
+    // These handles are explicitly software fixtures, never hardware evidence.
     let later = calls
         .lines()
         .skip(native_calls_after_startup)
         .collect::<Vec<_>>();
     assert_eq!(later.iter().filter(|v| **v == "device:sign").count(), 2);
     assert_eq!(later.iter().filter(|v| **v == "device:ecdh").count(), 2);
-    assert_eq!(later.iter().filter(|v| **v == "gate:ecdh").count(), 2);
-    assert!(!later.iter().any(|v| v.starts_with("witness:")));
+    assert!(later.iter().filter(|v| **v == "gate:ecdh").count() >= 2);
+    assert!(later.contains(&"witness:sign"));
+    assert!(later.contains(&"tls:sign"));
     drop(vault);
     drop(witness);
     witness = start(&binary, "witness", &wc, &client, &wo);
@@ -381,5 +357,5 @@ fn real_cli_services_broker_two_users_restart_and_revocation() {
     }
     drop(vault);
     drop(witness);
-    println!("PASS: real CLI HTTPS witness/Vault/broker; two subjects; isolated private-pipe workload; resident service keys; independent process restart; no restored uses; owner revocation. SOFTWARE KEY FIXTURE ONLY.");
+    println!("PASS: real CLI HTTPS witness/Vault/broker; two subjects; isolated private-pipe workload; native-handle service and TLS signing; independent process restart; no restored uses; owner revocation. SOFTWARE KEY FIXTURE ONLY.");
 }

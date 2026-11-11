@@ -18,6 +18,7 @@ use vault_rs::crypto::{decode, encode};
 const ROOT: &str = "/opt/vault-deployment-test";
 #[derive(Deserialize)]
 struct Request {
+    usage: vault_rs::keys::KeyUsage,
     operation: String,
     key_id: String,
     data: String,
@@ -32,7 +33,7 @@ fn main() -> Result<()> {
         );
         let uid: u32 = args.get(2).map(String::as_str).unwrap_or("0").parse()?;
         let mut values = serde_json::Map::new();
-        for name in ["device", "gate", "witness"] {
+        for name in ["device", "gate", "witness", "tls"] {
             let key = SecretKey::generate();
             let path = root.join(format!("{name}.fixture-key"));
             let mut f = OpenOptions::new()
@@ -61,8 +62,17 @@ fn main() -> Result<()> {
         ensure!(input.len() <= 65536, "test request too large");
         let request: Request = serde_json::from_slice(&input)?;
         ensure!(
-            ["device", "gate", "witness"].contains(&request.key_id.as_str()),
+            ["device", "gate", "witness", "tls"].contains(&request.key_id.as_str()),
             "unknown fixture"
+        );
+        ensure!(
+            request.usage
+                == if request.key_id == "device" {
+                    vault_rs::keys::KeyUsage::Interactive
+                } else {
+                    vault_rs::keys::KeyUsage::Service
+                },
+            "fixture usage mismatch"
         );
         let key = SecretKey::from_slice(&std::fs::read(
             root.join(format!("{}.fixture-key", request.key_id)),

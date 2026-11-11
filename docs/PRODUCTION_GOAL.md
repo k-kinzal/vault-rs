@@ -1,4 +1,4 @@
-# Production goal v3: software release and deployment decisions
+# Production goal v4: software release and deployment decisions
 
 The goal is a product suitable for production use. Every `production_ready` decision must specify its scope. `software_release` identifies a distribution with the G01-G13 implementation, macOS/Linux software evidence, and conditional assurance below. `deployment` accepts that distribution on a specific host with specific configuration and key generations. The former is evaluated by `scripts/release-evidence.py evaluate`; the latter by the actual CLI command `readiness --acceptance ... --config ...`.
 
@@ -8,7 +8,7 @@ The acceptance criteria preserve the requester's requirements. The requester exp
 
 ## Scope
 
-Target Macs with Secure Enclave and Linux systems with TPM 2.0. External PKCS#11 devices are optional. Do not claim equivalent non-exportability on systems without a protector. Local and hosted deployments share the protocol, implementation, and authorization, differing only in network reachability and user count. Even single-user operation requires an independent approver and a witness that cannot be rolled back with Vault.
+Target Mac/Linux clients with native protected keys and a common independent AMD SEV-SNP Linux service. Its key custodian is a separate trusted administrative domain. The confidential profile rejects direct PKCS#11 service startup; that optional library backend is not the memory protection boundary. Do not claim equivalent non-exportability on systems without a protector. Local and hosted deployments share the protocol, implementation, and authorization, differing only in network reachability and user count. Even single-user operation requires an independent approver and a witness that cannot be rolled back with Vault.
 
 Assume the AI can execute arbitrary code and debuggers under its OS account and obtain both an OAuth token and DPoP private key. Include malicious dependencies in developed tools/extensions, database/WAL/backup disclosure, and offline attacks against a lost PC. Forwarding a secret legitimately returned to the tool is explicitly excluded by the requester.
 
@@ -22,7 +22,7 @@ The design does not claim to distinguish an attacker from a legitimate user if t
 | G02 | The AI cannot read broker, decryption, or recipient keys | macOS/Linux attacks from separate UIDs against memory, FDs, IPC, configuration, and executable substitution |
 | G03 | Execute only owner-approved artifacts and arguments | Hash binding, modification races, symlinks, environment injection, and request impersonation from another process |
 | G04 | Keys are non-exportable and a stolen device cannot be used without approval | Hardware contract, helper builds, and software tests rejecting incorrect authentication or a different key. Physical-device experiments explicitly excluded |
-| G05 | Secrets/database keys cannot be recovered from the database and WAL | Encrypted database, key envelopes, rejection of decryption with only one share, and protector integration tests. Physical-device experiments explicitly excluded |
+| G05 | DB/WAL confidentiality and protected service runtime memory | Encrypted storage, SNP quote verification and binding, attested custody, native TLS, immutable-image/maintenance packaging, downgrade/replay tests and the explicit G-C contracts in GUARANTEES.md. A real deployment requires live attestation; software fixtures never replace it |
 | G06 | Preserve use limits, revocation, rollback resistance, and concurrency safety | Kani, state-machine models, real database fault injection, and independent-witness operation tests |
 | G07 | OAuth permissions cannot be expanded | Real-AS authorization, expiry, subject, audience, DPoP, and cross-tenant rejection tests |
 | G08 | Use the same mechanisms locally/hosted and for one/multiple users | Multi-tenant E2E tests over real HTTPS on macOS and Linux |
@@ -34,7 +34,7 @@ The design does not claim to distinguish an attacker from a legitimate user if t
 
 Set `software_release.production_ready=true` only when both OSes meet the product criteria and execution logs, distributed binaries, review, and formal verification cover the same source. G11 uses the direct machine verification and abstraction boundaries in PROOF_CONTRACT.md; it does not require or claim unconditional proof of OS/cryptographic/database internals. OS-independent verification such as Kani checks the same code shared by both platforms. OS-specific isolation, HTTPS/CLI, OAuth, and rebuild checks execute on each OS.
 
-Deployment additionally requires G04/G05 key enrollment, an independent guardian/witness, trusted time, protected administrative paths, a real AS, and measurement and approval of the target host. Only after those checks may `deployment.production_ready=true`. Synthetic successful validator fixtures, Linux-only passes, or macOS logs from different source do not establish product completion.
+Deployment additionally requires an independently reviewed SNP launch image, current VCEK/TCB approval, successful live probes, independent custody, and G04/G05 key enrollment, an independent guardian/witness, trusted time, protected administrative paths, a real AS, and measurement and approval of the target host. Only after those checks may `deployment.production_ready=true`. Synthetic successful validator fixtures, Linux-only passes, or macOS logs from different source do not establish product completion.
 
 ## Authoritative evidence
 
@@ -45,3 +45,5 @@ Linux evidence is in `evidence/latest/`; macOS evidence is the GitHub Actions `m
 Include `Release.physical_tests_excluded=true` in the release signature. Physical methods for G04/G05 may be replaced with software methods only when it agrees with root-managed `AuthorityPolicy.allow_physical_test_exclusion=true`. The default is false. G02 OS isolation and G11/G13 evidence cannot be omitted. Kani full-value-range checks and negative signature tests verify this condition.
 
 Defining a goal and providing evidence that it has been met are separate deliverables. Acceptance criteria alone never authorize production use.
+
+The stronger memory and native-handle claims supersede v3's resident-service-key architecture. Old successful v3 evidence does not establish v4 completion. See GUARANTEES.md for affirmative scoped theorems and the separately identified conditional composition argument. Physical SNP execution has not been performed in the development workspace.

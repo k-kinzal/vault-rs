@@ -2,7 +2,7 @@
 """PUBLIC SOFTWARE FIXTURE ONLY. Never install as a production native helper.
 
 Used inside a disposable network-isolated container to exercise the real CLI,
-resident-key startup, HTTPS, broker and restarts. This is not hardware evidence.
+native-handle startup, HTTPS, broker and restarts. This is not hardware evidence.
 """
 import base64, json, os, pathlib, sys
 from cryptography.hazmat.primitives import hashes, serialization

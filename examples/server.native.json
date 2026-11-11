@@ -1,19 +1,20 @@
 {
-  "listen": "127.0.0.1:8443",
-  "certificate": "/etc/vault-rs/server.crt",
-  "tls_key": "/etc/vault-rs/server.key",
-  "database": "/var/lib/vault-rs/vault.db",
+  "listen": "0.0.0.0:8443",
+  "certificate": "/etc/vault/server.crt",
+  "database": "/state/vault.db",
   "backend": {
     "kind": "native",
     "signing": {
-      "helper": "/usr/local/libexec/vault-native-key",
-      "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
+      "kind": "snp",
+      "endpoint": "https://REPLACE_WITH_INDEPENDENT_CUSTODIAN/",
+      "ca": "/etc/vault/custodian-ca.pem",
       "key_id": "witness-operator-sign",
       "public_key": "REPLACE_WITH_BASE64URL_COMPRESSED_P256_PUBLIC_KEY"
     },
     "decryption": {
-      "helper": "/usr/local/libexec/vault-native-key",
-      "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
+      "kind": "snp",
+      "endpoint": "https://REPLACE_WITH_INDEPENDENT_CUSTODIAN/",
+      "ca": "/etc/vault/custodian-ca.pem",
       "key_id": "guardian-ecdh",
       "public_key": "p256:REPLACE_WITH_BASE64URL_UNCOMPRESSED_P256_PUBLIC_KEY"
     }
@@ -27,10 +28,21 @@
   },
   "witness_url": "https://REPLACE_WITH_INDEPENDENT_WITNESS/v1/witness",
   "witness_public_key": "REPLACE_WITH_PINNED_WITNESS_KEY",
-  "witness_ca": "/etc/vault-rs/witness-ca.pem",
+  "witness_ca": "/etc/vault/witness-ca.pem",
   "postgres": {
-    "connection_envelope": "/etc/vault-rs/provider.encrypted.json",
-    "ca": "/etc/vault-rs/postgres-ca.pem",
-    "policy": { "provider": "postgres", "role": "report_reader", "max_ttl_seconds": 300 }
+    "connection_envelope": "/etc/vault/provider.encrypted.json",
+    "ca": "/etc/vault/postgres-ca.pem",
+    "policy": {
+      "provider": "postgres",
+      "role": "report_reader",
+      "max_ttl_seconds": 300
+    }
+  },
+  "tls_signing": {
+    "kind": "snp",
+    "endpoint": "https://REPLACE_WITH_INDEPENDENT_CUSTODIAN/",
+    "ca": "/etc/vault/custodian-ca.pem",
+    "key_id": "server-tls",
+    "public_key": "REPLACE_WITH_BASE64URL_COMPRESSED_P256_PUBLIC_KEY"
   }
 }

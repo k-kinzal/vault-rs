@@ -4,8 +4,8 @@
 use crate::{
     client::RecipientSession,
     crypto::*,
+    keys::{KeyRole, RuntimeKeyConfig},
     protocol::*,
-    resident::RuntimeKeyConfig,
     runner::{self, Bundle},
     witness::{ProofSigner, RemoteWitness},
 };
@@ -226,6 +226,19 @@ pub struct Authorization {
     pub grant: Signed<Grant>,
     pub access_token: String,
 }
+pub fn preflight(bytes: &[u8]) -> Result<()> {
+    let config: BrokerConfig = serde_json::from_slice(bytes)?;
+    config.device_signing.clone().open(KeyRole::DeviceSigning)?;
+    config
+        .device_decryption
+        .clone()
+        .open(KeyRole::DeviceUnwrap)?;
+    config
+        .allocator_signing
+        .clone()
+        .open(KeyRole::ServiceSigning)?;
+    Ok(())
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Approval {
@@ -301,8 +314,8 @@ pub fn run(
     config.device_signing.isolate_from(config.ai_uid)?;
     config.device_decryption.isolate_from(config.ai_uid)?;
     config.allocator_signing.isolate_from(config.ai_uid)?;
-    let device = config.device_signing.open()?;
-    let decryption = config.device_decryption.open()?;
+    let device = config.device_signing.open(KeyRole::DeviceSigning)?;
+    let decryption = config.device_decryption.open(KeyRole::DeviceUnwrap)?;
     ensure!(
         record.device_key == wrapping_key_hash(ShareUnwrapper::public_key(decryption.as_ref()))?,
         "wrong device decryption key"
@@ -389,7 +402,7 @@ pub fn run(
     let witness = RemoteWitness::new(
         config.allocator_url,
         config.allocator_public_key,
-        config.allocator_signing.open()? as Box<dyn ProofSigner>,
+        config.allocator_signing.open(KeyRole::ServiceSigning)? as Box<dyn ProofSigner>,
         allocator_ca.as_deref(),
     )?;
     let worker = runner::allocate_worker(

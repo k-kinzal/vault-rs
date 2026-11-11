@@ -18,16 +18,7 @@ Issuer-key rotation requires accepting new Trust configuration and deployment ev
 
 Owner/device/guardian operation-approval keys are distinct from service keys for the witness, operator, and database. Interactive approval keys use native Secure Enclave or TPM protection. Service keys are generated as P-256 keys; only an envelope encrypted to the hardware protector's public key is stored.
 
-```sh
-vault-rs generate-service-key --protector-public /etc/vault-rs/protector.pub --purpose signing
-vault-rs generate-service-key --protector-public /etc/vault-rs/protector.pub --purpose agreement
-```
-
-Save the output JSON's `envelope` in a root-managed file with mode 0600, and pin the accompanying `public_key` in configuration. RuntimeKeyConfig accepts the existing NativeConfig or `{protector:<NativeConfig>,envelope:<absolute path>,purpose:"signing"|"agreement",public_key:<pinned key>}`. At service startup, the protector unlocks the envelope and loads the key into memory only if purpose and public key match. Subsequent requests do not require a PIN. Restarting after shutdown requires unlocking again.
-
-Resident keys are software keys present in process memory. They are not claimed to be non-exportable. The protection boundary consists of separate root and AI UIDs, disabled core dumps, Linux dump restrictions, immutable configuration/executables, and an independent guardian. Control of a running root process's memory is a TCB compromise. Power-off/locking policy, disk encryption, and swap management belong to the deployment. Unit tests of resident keys do not substitute for physical-attack resistance.
-
-Native configuration on macOS requires `macos_uid`. Specify a dedicated login user separate from the AI, using that user's Keychain and GUI session. The design does not open Data Protection Keychain UI directly from a root launch daemon. Linux rejects `macos_uid`.
+Long-term service/TLS keys are native handles, with no encrypted resident-scalar import or generation command. Enroll separate service handles at the independently trusted custodian and use attested SNP descriptors in the common Linux guest. See [CONFIDENTIAL_DEPLOYMENT.md](CONFIDENTIAL_DEPLOYMENT.md) for fixed bootstrap/maintenance images, PCR policy, certificate enrollment and measurement approval.
 
 ## Key rotation
 
@@ -46,7 +37,7 @@ vault-rs rotate-storage --source /var/lib/vault-rs/old.db \
 
 This operation does more than rewrap the existing database's DEK. Tests verify that the new database cannot be opened with the old key or envelope. The old backup remains readable with its old key, so manage key retirement and backup retention. This program does not guarantee physical erasure of discarded media.
 
-Re-encrypt a provider DSN or resident-key envelope for a new protector with `rewrap-config --source ... --destination ... --old-key ... --new-key ...`. The new envelope is checked with the new key before being written; the new configuration requires separate acceptance.
+Re-encrypt a provider DSN envelope for a new protector with `rewrap-config --source ... --destination ... --old-key ... --new-key ...`. The new envelope is checked with the new key before being written; the new configuration requires separate acceptance.
 
 Update E2E records through `RecipientSession::rotate_record`. Complete an authorized release of the old record, then re-encrypt with a new version and DEK, splitting shares for the device's and guardian's new public keys. Retire the old grant through owner-signed revoke or quarantine, and approve a new Grant ID for the new record hash. Rotation never restores the old grant's remaining uses. Tests use independently generated new keys and reject decryption with old keys.
 
@@ -59,7 +50,7 @@ Update E2E records through `RecipientSession::rotate_record`. Complete an author
 
 ## Reproducing the tests
 
-`test-deployment.sh` starts real CLI processes inside rootless Docker. It checks HTTPS witness/Vault services, two subjects, the broker's private control pipe and separate-UID workload, startup-only resident-key unlocking, process restart, and revocation. Native helpers and issuer keys are synthetic fixtures and are not classified as physical-device evidence. Separately, `test-oauth.sh` checks a real AS protocol engine. These tests do not claim to have exercised both paths in a single production deployment.
+`test-deployment.sh` starts real CLI processes inside rootless Docker. It checks HTTPS witness/Vault services, two subjects, the broker's private control pipe and separate-UID workload, native-handle service and TLS signing, process restart, and revocation. Native helpers and issuer keys are synthetic fixtures and are not classified as physical-device evidence. Separately, `test-oauth.sh` checks a real AS protocol engine. These tests do not claim to have exercised both paths in a single production deployment.
 
 ## Initial database creation and configuration measurement
 
@@ -70,7 +61,7 @@ vault-rs initialize-storage --database /opt/vault-data/vault.db --key-config /op
 vault-rs observe --config /opt/vault-config/server.json
 ```
 
-`initialize-storage` creates a new encrypted generation and digest without overwriting an existing database or key envelope. Specify the same key as the service's decryption RuntimeKeyConfig. Initialize the witness database in the same way. The configuration hash from `observe` binds the main configuration plus the contents of helpers, CAs, key envelopes, providers, extensions, and other inputs, tagged by role and canonical path, including the database key envelope. Mutable database pages are excluded. An envelope that differs from the accepted generation is rejected before unwrap.
+Run initialization and rotation inside an approved fixed maintenance SNP image; native-only CLI descriptors are rejected. `initialize-storage` creates a new encrypted generation and digest without overwriting an existing database or key envelope. Specify the same key as the service's decryption RuntimeKeyConfig. Initialize the witness database in the same way. The configuration hash from `observe` binds the main configuration plus the contents of helpers, CAs, key envelopes, providers, extensions, and other inputs, tagged by role and canonical path, including the database key envelope. Mutable database pages are excluded. An envelope that differs from the accepted generation is rejected before unwrap.
 
 Then register signed release/review/deployment evidence and the authority policy. Pass only a configuration accepted by `readiness` to `serve`, `witness`, or `broker` through `--acceptance`. Successful validation of a release's distribution artifacts does not imply approval of your deployment. The actual enrolled authorities must create the required signatures through `approve`.
 

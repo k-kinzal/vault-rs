@@ -15,7 +15,7 @@ Production requirements are defined by [13 acceptance criteria](docs/PRODUCTION_
 - Target Macs with Secure Enclave and Linux systems with TPM 2.0. External PKCS#11 devices are optional. There is no automatic fallback to software keys.
 - Bind signed release, review, and deployment evidence to the source, binary, configuration, host, and validity period. Check all 13 criteria on both OSes before accepting production startup.
 
-Local and hosted deployments use the same HTTPS, cryptography, and authorization. Even single-user operation requires an independent guardian and a witness that cannot be rolled back with Vault. Native approval keys are interactive. Resident service keys are unlocked by a hardware protector at startup; subsequent HTTPS and witness operations do not repeatedly request UI interaction or a PIN. Resident keys themselves are not claimed to be non-exportable.
+Local and hosted deployments use the same HTTPS, cryptography, and authorization. Even single-user operation requires an independent guardian and a witness that cannot be rolled back with Vault. Native approval keys are interactive. Service and TLS signing keys remain native handles at an independent key custodian. Mac/Linux clients use a common Linux SNP guest; each protected operation requires fresh attestation, and DB runtime memory remains inside that guest. See [conditional guarantees](docs/GUARANTEES.md) and [confidential deployment](docs/CONFIDENTIAL_DEPLOYMENT.md).
 
 ## Verification
 
@@ -38,7 +38,7 @@ Without evidence, `readiness` exits nonzero. Normal `serve`, `witness`, and `bro
 
 ## Interfaces
 
-Commands include `initialize-storage`, `seal`, `protect-config`, `generate-service-key`, `rotate-storage`, `rewrap-config`, `measure-bundle`, `broker`, `approve`, `serve`, `witness`, `observe`, and `readiness`. Owner and guardian approval use typed JSON and native-key confirmation prompts or PINs. A general-purpose OAuth consent UI and organization-management UI are not included.
+Commands include `initialize-storage`, `seal`, `protect-config`, `rotate-storage`, `rewrap-config`, `measure-bundle`, `broker`, `approve`, `custodian`, `serve`, `witness`, `observe`, and `readiness`. Owner and guardian approval use typed JSON and native-key confirmation prompts or PINs. A general-purpose OAuth consent UI and organization-management UI are not included.
 
 See [key, OAuth, and recovery operations](docs/OPERATIONS.md), [broker and acceptance](docs/BROKER.md), [the protocol](docs/PROTOCOL.md), [the threat model](docs/THREAT_MODEL.md), [key enrollment and physical testing](docs/HARDWARE.md), and [configuration examples](examples/). Example configurations contain placeholders and cannot be started unchanged. Test PEM files contain public synthetic data.
 

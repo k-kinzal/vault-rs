@@ -86,7 +86,7 @@ else:
             assert json.loads((directory/'sources.json').read_text()) == sources(), 'evidence belongs to a different source tree'
             verify_logs(directory,manifest['logs_sha256'])
         names = {r['name'] for r in linux['commands'] if r.get('passed') is True}
-        required = {'rustc','kani-version','java','openssl','audit-version','vendor','format','python-syntax','evidence-checks','clippy','tests','oauth','kani','model','kernel-mutations','postgres','tpm-simulation','os-isolation','deployment','audit','audit-db-commit','release-build','clean-rebuild','readiness'}
+        required = {'rustc','kani-version','java','openssl','audit-version','vendor','format','python-syntax','confidential-image','evidence-checks','clippy','tests','oauth','kani','model','kernel-mutations','postgres','tpm-simulation','os-isolation','deployment','audit','audit-db-commit','release-build','clean-rebuild','readiness'}
         assert required <= names, 'missing Linux verification'
         assert {'commands/'+name+'.log' for name in required} <= set(linux['logs_sha256']), 'unhashed Linux evidence'
         required_mac = {'tests.log','oauth.log','os-isolation.log','deployment.log','clean-rebuild.log','build.log','swift.log'}

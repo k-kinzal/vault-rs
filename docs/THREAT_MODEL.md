@@ -1,5 +1,8 @@
 # Threat model and prerequisites
 
+The current confidential-service profile and exact affirmative guarantees are defined in [GUARANTEES.md](GUARANTEES.md). Mac/Linux brokers use the same independent Linux SNP service. Host-memory protection excludes the independently trusted key custodian, guest kernel/application compromise and the other explicit primitive contracts there. Prior resident-key evidence does not cover this stronger profile.
+
+
 ## Goals and boundaries
 
 Forwarding, echoing, or maliciously using a secret already returned to an authorized tool is explicitly excluded by the requester. Vault keys, grants with expanded privileges, unauthorized decryption, reuse of consumed permissions, and decryption from leaked databases remain in scope.
