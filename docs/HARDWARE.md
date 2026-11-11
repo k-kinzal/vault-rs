@@ -1,25 +1,25 @@
-# 内蔵鍵を標準にする構成
+# Built-in key protection by default
 
-外部HSMだけを前提にしない。MacはSecure Enclave、LinuxはTPM 2.0を標準の実現対象とし、PKCS#11はオプション。実行時に利用できなければ起動／操作を拒否し、ソフトウェアPEMへ自動退避しない。
+The design does not require an external HSM as its only option. Secure Enclave on macOS and TPM 2.0 on Linux are the primary targets; PKCS#11 is optional. If protection is unavailable at runtime, startup or the operation fails. There is no automatic fallback to software PEM keys.
 
-| 環境 | バックエンド | 保護と現在の証跡 |
+| Environment | Backend | Protection and current evidence |
 |---|---|---|
-| Secure Enclave搭載Mac | Security.framework、P-256署名／ECDH | Apple SDKでRust／SwiftのARM64 Mach-O生成済み。userPresence＋WhenUnlockedThisDeviceOnly。Macソフトウェアはnative CIで検査。物理SE試験は除外 |
-| Linux＋物理TPM2 | tpm2-tools、fixedTPM/fixedParent鍵、PIN | helper source提供。swtpmでコマンド形式・ECDH一致・署名・誤PIN拒否を実行。物理耐性の証拠ではない |
-| 外部PKCS#11 | RSA-OAEP復号／ECDSA署名 | feature=pkcs11でコンパイル、実デバイス未接続 |
-| 内蔵保護装置なし | 未対応 | ソフトウェア鍵だけで盗難耐性を同等としない。別の保護されたguardian端点を設ける必要あり |
+| Mac with Secure Enclave | Security.framework, P-256 signing/ECDH | ARM64 Mach-O Rust/Swift binaries generated with the Apple SDK; userPresence and WhenUnlockedThisDeviceOnly. macOS software is checked in native CI. Physical Secure Enclave tests are excluded |
+| Linux with physical TPM 2.0 | tpm2-tools, fixedTPM/fixedParent keys, PIN | Helper source provided. swtpm tests command formats, matching ECDH results, signatures, and rejection of incorrect PINs. This is not evidence of physical resistance |
+| External PKCS#11 | RSA-OAEP decryption/ECDSA signing | Compiles with feature=pkcs11; no physical device has been connected |
+| No built-in protection | Unsupported | Software keys alone do not provide equivalent theft resistance. A separate protected guardian endpoint is required |
 
-## 鍵を分離する
+## Separate key roles
 
-owner署名、OAuth issuer、DPoP、device operation署名、guardian operation署名、device ECDH、guardian ECDH、witness/operator署名は役割が異なる。同じ鍵を使い回さない。owner登録時に二つの承認側の公開鍵と目的を確認する。
+Owner signing, OAuth issuer, DPoP, device-operation signing, guardian-operation signing, device ECDH, guardian ECDH, and witness/operator signing have different roles. Do not reuse the same key across roles. When enrolling the owner, verify both approval parties' public keys and purposes.
 
-guardianをdeviceと同じ侵害可能なOSアカウントに置くと共倒れになる。単独利用でも独立したOS保護領域／ユーザー承認を必要とする。ローカル／hostedでこの条件は変わらない。vTPMはクラウド管理者を信頼する場合の保護領域で、管理者に対する非エクスポート性を自動的に保証しない。
+Putting the guardian in the same compromisable OS account as the device exposes both to the same compromise. Even single-user operation requires independent OS protection domains and user approval. This condition is identical for local and hosted deployments. A vTPM is a protection domain only under trust in the cloud administrator; it does not automatically provide non-exportability against that administrator.
 
-## Native helper契約
+## Native helper contract
 
-Rustの`NativeKey`はcanonicalな絶対path、root所有かつgroup/other書込不可のhelperと親directory、SHA-256を検査する。環境をクリアしてhelperを起動し、stdin/stdoutの小さなJSON契約で`sign`または`ecdh`を呼ぶ。秘密鍵そのものを返すoperationはない。signはmessage全体を表示し、ECDHはrecord/storageのlabelを表示する。署名はRust側で登録公開鍵との一致も検証する。
+Rust's `NativeKey` validates a canonical absolute path, root ownership, no group/other write permission on the helper and parent directories, and SHA-256. It launches the helper with a cleared environment and calls `sign` or `ecdh` through a small stdin/stdout JSON contract. No operation returns the private key itself. Signing displays the complete message; ECDH displays the record/storage label. Rust also verifies signatures against the enrolled public key.
 
-この契約はgeneric signing oracleとしてAIに公開しません。Linux helperは実UID／実効UIDがroot以外なら拒否します。Mac helperは`macos_uid`に指定した専用ログインユーザーのGUIセッションで実行します。Rust側はrootから`launchctl asuser UID sudo -n -H -u #UID -- helper`を起動し、AI UIDと鍵所有者UIDが一致した構成を拒否します。Keychainアイテムは鍵所有者のユーザー領域に保存します。AIが自分のUIDで同名の鍵を生成しても登録公開鍵と異なるため利用できません。brokerの制御入力は管理者が保持するinherited pipeだけです。この経路のソフトウェア実行はnative CIのdeployment.logで確認し、実Secure Enclave操作の物理試験とは区別します。
+This contract is not exposed to the AI as a generic signing oracle. The Linux helper rejects callers whose real or effective UID is not root. The macOS helper runs in the GUI session of the dedicated login user specified by `macos_uid`. From root, Rust invokes `launchctl asuser UID sudo -n -H -u #UID -- helper` and rejects configurations where the AI UID equals the key owner's UID. Keychain items belong to the key owner's user domain. A same-named key created under the AI's own UID does not match the enrolled public key and cannot be used. Broker control input is restricted to an inherited pipe held by the administrator. Native CI `deployment.log` covers software execution of this path, separately from physical testing of real Secure Enclave operations.
 
 ### macOS
 
@@ -27,33 +27,35 @@ Rustの`NativeKey`はcanonicalな絶対path、root所有かつgroup/other書込�
 swiftc platform/macos/SecureEnclaveHelper.swift -o SecureEnclaveHelper
 ```
 
-管理者が署名・entitlements・keychain access groupを定義して保護pathに配置する。安易なad-hoc codesignを本番の信頼根拠にしない。JSON `{operation:"create",key_id:"device-sign",data:"",context:"..."}` によりSecKeyを生成する（実際は正しいJSON quotingが必要）。公開鍵は65byte SEC1。暗号化用には`p256:`＋base64url、署名用には圧縮33byte SEC1へ変換して設定する。
+An administrator defines signing, entitlements, and the keychain access group, then installs the helper at a protected path. Do not treat casual ad-hoc codesigning as a production trust anchor. JSON `{operation:"create",key_id:"device-sign",data:"",context:"..."}` creates a SecKey; actual input requires valid JSON quoting. The public key is 65-byte SEC1. For encryption configuration, encode it as `p256:` plus base64url; for signing, convert it to compressed 33-byte SEC1.
 
-`public`、`sign`、`ecdh`をサポート。生成時もユーザーに確認する。macOSのprompt再利用・ロック・アクセス制御の挙動は実機で検証するまで保証しない。外部画面のtrusted transaction表示やXPCサービスは今後実装する。
+The helper supports `public`, `sign`, and `ecdh`, and requests user confirmation during creation as well. Prompt reuse, locking, and access-control behavior are not guaranteed until tested on a physical device. Trusted transaction display on an external screen and an XPC service remain future work.
 
 ### Linux
 
-管理者が実TPM `/dev/tpmrm0` にP-256鍵を登録する。キー属性は署名用`fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign`、ECDH用は最後を`decrypt`にする。`noda`を設定せずdictionary-attack保護を有効にする。PINは非空で端末から入力し、argv／環境へ置かない。
+An administrator enrolls P-256 keys on the real TPM at `/dev/tpmrm0`. Signing attributes are `fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign`; use `decrypt` as the final attribute for ECDH. Leave `noda` unset to enable dictionary-attack protection. Enter a nonempty PIN through the terminal, never through argv or environment variables.
 
-root管理の `/var/lib/vault-rs/tpm/<key_id>/` に `key.pub`、TPMにラップされた`key.priv`、`parent-handle`（`0x81......`）を置く。親は管理者が作成するpersistent storage parentで、既存handleを上書きしない。key.privは秘密鍵の平文exportではない。公開鍵fingerprintと属性の登録証跡を保存する。
+Under root-managed `/var/lib/vault-rs/tpm/<key_id>/`, store `key.pub`, the TPM-wrapped `key.priv`, and `parent-handle` (`0x81......`). The parent is an administrator-created persistent storage parent; never overwrite an existing handle. `key.priv` is not a plaintext private-key export. Preserve enrollment evidence for the public-key fingerprint and attributes.
 
-現行helperはroot管理brokerだけが実行できます。AIのUIDをTPM/key directoryへアクセスできるgroupへ入れず、rootへの昇格手段を与えません。root所有のhelperへ`chmod 755`、directoryは管理者のみ変更可能にする。Python interpreterとtpm2-toolsもTCBである。
+The current helper can only be invoked by the root-managed broker. Do not place the AI UID in groups with access to the TPM/key directory or give it a path to root elevation. Set the root-owned helper to mode 755 with `chmod 755` and make directories writable only by administrators. The Python interpreter and tpm2-tools are also part of the TCB.
 
-`platform/linux/enroll-tpm.py`は管理者が用意した既存persistent parentへ鍵を登録し、強いランダムauthorizationを`/dev/tty`に一度表示して保存確認を求めます。stdoutには公開情報だけを返し、既存鍵／parentを上書きしません。実TPM専用で、まだ実機で実行していません。
+`platform/linux/enroll-tpm.py` enrolls keys under an existing persistent parent prepared by the administrator. It displays a strong random authorization value once on `/dev/tty` and asks for confirmation that it was saved. Only public information is returned on stdout; existing keys and parents are not overwritten. It targets a real TPM and has not yet been run on physical hardware.
 
-現在のhelperは`/dev/tty`へ承認対象を表示してPINを求める対話方式。認証ファイルはtmpfs内mode0600で一時的に生成し終了時に消す。PythonやTPM utility内のメモリの完全ゼロ化は保証しない。無人serviceには起動時に解錠するresident keyを使います（[OPERATIONS.md](OPERATIONS.md)）。owner/device/guardianの対話承認UIは分離します。PINのenv注入で無人化しません。
+The helper currently displays the operation on `/dev/tty` and interactively requests a PIN. Temporary authentication files are created in tmpfs with mode 0600 and deleted at exit. Complete memory zeroization inside Python or TPM utilities is not guaranteed. Unattended services use resident keys unlocked at startup; see [OPERATIONS.md](OPERATIONS.md). Owner/device/guardian interactive approval remains separate. Do not automate it through PIN environment injection.
 
 ### PKCS#11
 
-moduleをroot管理path＋digestで固定し、hardware slot、token serial、protected authentication pathを必須とする。private keyはSensitive/AlwaysSensitive/Local/NeverExtractable=true、Extractable=false。各fresh sessionで認証する。現在`AlwaysAuthenticate=true`鍵のcontext-specific loginは未実装なので拒否する。これらの属性はtrusted moduleの申告であり、remote attestationではない。
+Pin the module by a root-managed path and digest. Require a hardware slot, token serial, and protected authentication path. Private-key attributes must be Sensitive/AlwaysSensitive/Local/NeverExtractable=true and Extractable=false. Authenticate each fresh session. Context-specific login for `AlwaysAuthenticate=true` keys is not implemented, so those keys are rejected. These attributes are assertions by a trusted module, not remote attestation.
 
-## 物理鍵実験（利用者指定で今回の受入から除外、すべて未実施）
+## Physical-key experiments
 
-1. 鍵の平文exportが不可能であり、wrapped blobを別端末へコピーしても操作できない。
-2. ロック／再起動／ユーザー不在で拒否され、誤PIN制限や生体認証失敗が有効。
-3. AIのUID・署名の異なるアプリ・デバッガ・別セッションからの呼出しを拒否する。
-4. ユーザーが確認したresource/recipient/artifact以外を署名できず、差替えを拒否する。
-5. DB・WAL・key envelopeだけを持つ別環境で開けない。
-6. 未承認のbuild／helper／依存library更新を拒否し、正規更新と復旧の証跡を保存する。
+The requester excluded these experiments from this acceptance run; none has been performed.
 
-TPM simulatorのPASSをこの受入試験のPASSに転記しない。
+1. Plaintext key export is impossible, and copying a wrapped blob to another machine does not permit operations.
+2. Locking, restarting, or absence of the user causes rejection; incorrect-PIN limits and biometric failures are effective.
+3. Calls from the AI UID, differently signed applications, debuggers, and other sessions are rejected.
+4. Signing is limited to the resource, recipient, and artifact the user confirmed; substitution is rejected.
+5. Another environment cannot open data using only the database, WAL, and key envelope.
+6. Unapproved build, helper, and dependency-library updates are rejected; authorized updates and recovery retain evidence.
+
+Never copy a TPM simulator PASS into the results of these physical acceptance tests.

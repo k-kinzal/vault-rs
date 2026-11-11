@@ -1,34 +1,34 @@
-# 保証範囲と証跡
+# Assurance scope and evidence
 
-製品の本番利用判定は `evidence/release.json` の `decision_scope=software_release`、特定配置の判定は実CLI `readiness` の `decision_scope=deployment` です。製品判定にはLinux全試験と実macOS上のソフトウェア試験を、同一sourceに対して必要とします。配置先の署名は自動生成しません。物理鍵実験のみ利用者指定で除外します。
+The product's production decision is `decision_scope=software_release` in `evidence/release.json`. Acceptance of a specific deployment is `decision_scope=deployment` from the actual `readiness` CLI. Product acceptance requires all Linux checks and software tests on real macOS for the same source. Deployment signatures are not generated automatically. Only physical-key experiments are excluded at the requester's direction.
 
-## ゴールと証跡の対応
+## Goals and supporting evidence
 
-| ID | 実装・必要証跡 | 保証境界 |
+| ID | Implementation and required evidence | Assurance boundary |
 |---|---|---|
-| G01 | device/guardian独立署名、共有wire predicateのKani、盗難token/DPoPと各field改変試験 | 署名偽造困難性と登録鍵を信頼 |
-| G02 | Mac/Linux別UIDでmemory/FD/file/IPC/直接broker起動を拒否 | kernel/rootはTCB |
-| G03 | bundle/引数/instance/recipient束縛、変更不可path、Mac ACL拒否 | system runtimeと管理者更新を信頼 |
-| G04 | SE/TPM helper build、swtpm、native profileの誤鍵拒否 | 物理鍵実験は除外。fixtureをhardware証跡にしない |
-| G05 | SQLCipher/WAL、2-of-2 E2E、受入済みDB generation pin、差替え前unwrap拒否 | hardware protector、暗号primitive、swap/物理メモリ保護 |
-| G06 | Kani controller、TLC並行/crash/rollback、実DB commit失敗 | 独立witness CASと非巻き戻し性 |
-| G07 | 実ASのcode/S256 PKCE/DPoP/nonce/subject/期限、共有scope/parser predicate | 本番ASのidentity/consent運用 |
-| G08 | 両OS実CLI HTTPS、二人利用、private stdin、再起動・失効 | 配置先TLS/identity登録 |
-| G09 | Wasm import/FS/network/fuel/memory制限、実PostgreSQL role/TTL/冪等/失効 | trusted issuer/SQL。停止中の既存DB sessionは期限切れだけで終了しない |
-| G10 | DB DEK/設定/E2E rotation、永久廃止、source/binary/config/host/epoch/期限束縛 | 更新時の停止・新世代path・再受入 |
-| G11 | 実認可/共有型/実32byte split/commit controllerの機械検証、反例付き変異試験 | PROOF_CONTRACT.mdのprimitive契約。全service simulation theoremではない |
-| G12 | 指定鍵署名と完全性、受入snapshot、transitive入力pin、各種負例 | 署名者・ログ出所の信頼。異なる鍵は異なる人間の証明ではない |
-| G13 | locked build、依存監査、固定tools/images、両OS clean rebuild、独立agentレビュー | compiler等はTCB。第三者認証とは呼ばない |
+| G01 | Independent device/guardian signatures, Kani checks of shared wire predicates, stolen-token/DPoP and field-tampering tests | Trust signature unforgeability and enrolled keys |
+| G02 | Separate-UID rejection of memory/FD/file/IPC access and direct broker invocation on macOS/Linux | Kernel/root are in the TCB |
+| G03 | Bundle/argument/instance/recipient binding, immutable paths, macOS ACL rejection | Trust system runtime and administrator updates |
+| G04 | Secure Enclave/TPM helper builds, swtpm, rejection of incorrect keys in native profiles | Physical-key experiments excluded; fixtures are not hardware evidence |
+| G05 | SQLCipher/WAL, 2-of-2 E2E encryption, accepted database-generation pinning, rejection of substitution before unwrap | Hardware protector, cryptographic primitives, swap/physical-memory protection |
+| G06 | Kani controller, TLC concurrency/crash/rollback model, real database commit failures | Independent witness CAS and non-rollback behavior |
+| G07 | Real-AS code/S256 PKCE/DPoP/nonce/subject/expiry tests, shared scope/parser predicates | Production AS identity and consent operations |
+| G08 | Actual CLI HTTPS on both OSes, two users, private stdin, restart, and revocation | Deployment TLS and identity enrollment |
+| G09 | Wasm import/filesystem/network/fuel/memory restrictions, real PostgreSQL role/TTL/idempotence/revocation tests | Trusted issuer/SQL. Expiry alone does not terminate existing database sessions while cleanup is stopped |
+| G10 | Database DEK/configuration/E2E rotation, permanent retirement, source/binary/config/host/epoch/expiry binding | Stop, install at new generation paths, and reaccept updates |
+| G11 | Machine verification of actual authorization/shared types/32-byte splitting/commit controller, mutation tests with counterexamples | Primitive contracts in PROOF_CONTRACT.md; not a whole-service simulation theorem |
+| G12 | Designated-key signatures and completeness, accepted snapshots, transitive-input pinning, negative tests | Trust signers and log provenance. Different keys do not prove different people |
+| G13 | Locked builds, dependency auditing, pinned tools/images, clean rebuilds on both OSes, independent-agent review | Compiler and other dependencies remain in the TCB; not third-party certification |
 
-## 形式検証
+## Formal verification
 
-Kaniは製品と同じno_std policyコードをRustの全scalar bit幅で検証します。wire field比較、OAuth/DPoP、challenge、execution、実Request変換、State遷移、永続順序、UID/失効/期間、証跡methodと物理除外、32byte share処理を含みます。scope文法は実step/finishの初期・遷移・終了の機械検証と構造帰納法によって256 byte全域を含む有限入力を扱います。foldの対応はRust iterator/control-flow semanticsに基づき、別々に展開した全ループのKani成功とは区別します（SCOPE_PROOF.md）。harness数と成否の正本は `commands/kani.log` です。署名関数やserde/OpenSSL/OSをKaniに渡した証明ではありません。
+Kani checks the same no_std policy code used by the product across full Rust scalar bit widths. Coverage includes wire-field comparisons, OAuth/DPoP, challenges, execution, actual Request conversion, State transitions, persistence ordering, UID/revocation/interval handling, evidence methods and physical-test exclusions, and 32-byte share operations. Machine-checked initialization, transition, and finalization lemmas for the actual scope step/finish functions combine with structural induction to cover finite inputs, including the full 256-byte domain. Fold correspondence rests on Rust iterator/control-flow semantics and is distinct from a successful Kani run over two separately unrolled entire loops; see SCOPE_PROOF.md. `commands/kani.log` is authoritative for harness counts and results. Signature functions, serde, OpenSSL, and the OS are not themselves proven in Kani.
 
-TLCのbaselineは一つのgrant、4 request identities、budget/challenge/admin/provider attempts各2の有限探索です。拡張モデルのレビュー時探索は1,587,137 distinct states、9,465,906 generated、depth 33でした。再実行ログを正本とし、fingerprint衝突評価も残します。6防御の削除は指定不変条件の反例を必須とし、3到達性試験で正規release・同一issue再送・admin crash後quarantineを確認します。
+The TLC baseline explores one grant, four request identities, and a bound of two each for budget, challenges, administrator operations, and provider attempts. During review, the expanded model explored 1,587,137 distinct states and 9,465,906 generated states at depth 33. Rerun logs are authoritative and retain fingerprint-collision estimates. Removing each of six defenses must produce a counterexample to a specified invariant. Three reachability checks demonstrate an authorized release, an identical-issue retry, and quarantine after an administrator crash.
 
-実Rust sourceの認可検査を削除するmutationも、対応harnessの `VERIFICATION:- FAILED` を必要とします。コンパイル失敗は検出成功として数えません。暗号学的安全性、任意人数の無限状態、全サービスのlivenessや未知脆弱性の不存在を証明したとは扱いません。
+Mutations that remove authorization checks from actual Rust source must also produce `VERIFICATION:- FAILED` in the corresponding harness. Compilation failures do not count as successful detection. These checks do not prove cryptographic security, unbounded state for arbitrary user counts, whole-service liveness, or the absence of unknown vulnerabilities.
 
-## 実行と統合
+## Execution and aggregation
 
 ```sh
 python3 scripts/restore-vendor.py
@@ -38,12 +38,12 @@ python3 scripts/release-evidence.py evaluate \
   --linux evidence/latest --macos evidence/macos --output evidence/release.json
 ```
 
-Linux runは開始/終了source不変、format/clippy/test、実OAuth AS、Kani/TLC/mutation、実PostgreSQL、swtpm、別UID隔離、実CLI deployment、監査、release/clean rebuildを記録します。MacはGitHub `macos-15` runner上でunit/integration、OAuth、OS隔離とACL、実CLI二人利用/再起動/失効、Swift helper build、clean rebuildを行います。Mac cross buildだけではMac runtime evidenceを満たしません。
+Linux runs record unchanged source between start and finish, formatting/Clippy/tests, a real OAuth AS, Kani/TLC/mutations, real PostgreSQL, swtpm, separate-UID isolation, actual CLI deployment, auditing, release build, and clean rebuild. The GitHub `macos-15` runner performs native unit/integration tests, OAuth, OS isolation and ACL checks, actual CLI use by two users with restart/revocation, Swift helper compilation, and a clean rebuild. A macOS cross-build alone does not satisfy macOS runtime evidence requirements.
 
-各manifestはsource一覧、source fingerprint、binary/log SHA-256を持ちます。統合validatorは両OSのsource一致、全必要検査、ログdigest、レビュー結果を照合します。これはレビューされた実行ログからの条件付き判定であり、hashや署名がログの真実性まで証明するものではありません。`readiness`の成功fixtureは検査器の試験で、実配置の受入にexportしません。
+Each manifest includes the source inventory, source fingerprint, and binary/log SHA-256 digests. The aggregate validator checks source equality across both OSes, every required check, log digests, and review results. This is a conditional decision based on reviewed execution logs; hashes and signatures do not prove the truth of those logs. Successful `readiness` fixtures test the validator and are not exported as acceptance of a real deployment.
 
-## レビューと依存
+## Reviews and dependencies
 
-[REVIEW.md](REVIEW.md)に別agentの所見・修正・残る仮定を保存します。自動化された独立コンテキストのレビューであり、独立組織や人間の認証ではありません。Mac CIで見つかったTLS証明書生成差、DB parent alias/NOFOLLOWの差も実行で修正しています。
+[REVIEW.md](REVIEW.md) records findings, fixes, and remaining assumptions from a separate agent. This is automated review in an independent context, not certification by an independent organization or person. Execution also exposed and resolved macOS differences in TLS certificate generation and database parent aliases/NOFOLLOW behavior.
 
-初回監査のcrypto-bigint/SQLite/RSA報告に対応し、P-256/HPKEを更新し、RSA private crateを製品から除去しました。libsqlite3-sysはupstream archive digestとSQLCipher/SQLite依存指定の1行patchを検証します。Cコードの独自改変はありません。最新RustSec DB commitと監査結果は実行ログが正本です。compiler/kernel/OpenSSL/helper等の更新も新しい配布物と配置受入の対象です。
+The initial audit's crypto-bigint/SQLite/RSA findings led to P-256/HPKE updates and removal of the RSA private-operation crate from the product. Verification checks the upstream libsqlite3-sys archive digest and the single-line SQLCipher/SQLite dependency patch. There are no custom C-code changes. Execution logs are authoritative for the current RustSec database commit and audit results. Updates to the compiler, kernel, OpenSSL, helpers, and similar dependencies require a new distribution and deployment acceptance.

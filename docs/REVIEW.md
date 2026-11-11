@@ -1,8 +1,8 @@
-# レビュー記録
+# Review record
 
-別コンテキストのagentによるレビュー。第三者機関の認証ではありません。
+Review by an agent in a separate context. This is not certification by a third-party organization.
 
-security_reviewから報告されたMac ACL、device unwrap後の期限、DB generation差替えの3指摘を修正し、回帰試験を追加しました。同agentの最終パスはツールエラーで中断したため、完了したsecurity auditとは数えません。以下はformal_reviewによる実装接続の最終確認です。親agentによる追加のMac ATTACH修正とCI検証は実行ログへ記録します。
+Three findings from security_review were fixed and regression tests were added: macOS ACL handling, expiry after device unwrap, and database-generation substitution. That agent's final pass was interrupted by a tool error, so it is not counted as a completed security audit. The following is formal_review's final check of implementation integration. The parent's additional macOS ATTACH fix and CI verification are recorded in execution logs.
 
 # Final integrated-fix review
 

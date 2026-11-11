@@ -1,38 +1,38 @@
-# 脅威モデルと必要条件
+# Threat model and prerequisites
 
-## 目標と境界
+## Goals and boundaries
 
-正規ツールへ返した秘密値の転送・echo・悪意ある利用は利用者の除外条件です。一方、Vault鍵、権限を広げたgrant、未承認の復号、回数の再利用、DBからの復号は防御対象です。
+Forwarding, echoing, or maliciously using a secret already returned to an authorized tool is explicitly excluded by the requester. Vault keys, grants with expanded privileges, unauthorized decryption, reuse of consumed permissions, and decryption from leaked databases remain in scope.
 
-トークンとDPoP秘密鍵を同時に盗んだ攻撃者は、OAuthに関しては正規クライアントと区別できません。追加する識別根拠は、別保護領域のdevice／guardianによる、nonce・recipient・対象・実行物・期限まで含む署名です。これらの署名オラクルまで自由に操作できる攻撃者はこの前提を超えます。ブロックチェーン、ZK所有証明も、盗んだ同じwitnessだけで正規者と攻撃者を区別する根拠にはなりません。
+An attacker holding both an OAuth token and its DPoP private key is indistinguishable from the legitimate client at the OAuth layer. The additional distinguishing evidence is a signature from the device and guardian in separate protection domains, covering the nonce, recipient, target, executable, and expiry. An attacker who can freely operate those signing oracles exceeds this assumption. Blockchain or zero-knowledge proofs of possession cannot distinguish the legitimate party from an attacker using the same stolen witness either.
 
-## 攻撃能力
+## Attacker capabilities
 
-| 攻撃 | 実装での扱い | 残る条件 |
+| Attack | Implementation response | Remaining assumptions |
 |---|---|---|
-| OAuthトークン＋DPoP鍵の流出 | device・guardianの独立署名を要求 | 承認UI／署名サービスを攻撃者が代理操作できないこと |
-| 通信の観測・差し替え | TLS＋署名＋AEAD、recipient／要求ハッシュへの束縛 | 証明書・issuer・owner公開鍵の登録を信頼 |
-| DB・WAL・バックアップと鍵envelopeの流出 | SQLCipher＋ラップ鍵＋E2E暗号 | 非エクスポート鍵とアンロック認証が破られないこと |
-| Vault DBの改変・過去への巻き戻し | 独立witnessの版・ハッシュと不一致なら停止 | witness自身も同時に巻き戻されないこと |
-| 許可範囲外の操作・別ユーザーのgrant | owner署名、OAuth sub、grant ID、action、resourceの一致を強制 | owner／ASの鍵を信頼 |
-| 二重送信・同時送信・クラッシュ | witness→DB確定→開示の順序、使用回数を消費 | SQLiteのロック／fsync、witness CASを信頼 |
-| 悪意あるextension入力 | role・TTL・providerを固定、任意SQL不可 | 実際のPostgreSQL権限設定とtrusted issuerを信頼 |
-| AI／ツールの依存関係侵害 | grantの実行物ハッシュ／recipient束縛、鍵をHTTPで公開しない | root管理broker／使い捨てUIDを実装、Linux隔離試験済み。Macソフトウェアはnative CI、物理鍵試験は除外 |
-| PC盗難 | Secure Enclave＋user presence、TPM＋PINを設計 | 物理実機未検証。稼働中でアンロック済みのPC全体を奪われる場合は未解決 |
-| サービス／OS／コンパイラの侵害 | TCB侵害として保証外 | 独立guardian、最小権限、更新承認、再現ビルド検証が必要 |
+| OAuth token and DPoP key theft | Require independent device and guardian signatures | The attacker cannot operate the approval UI or signing service on the user's behalf |
+| Network observation or substitution | TLS, signatures, AEAD, and recipient/request-hash binding | Trust certificate, issuer, and owner public-key enrollment |
+| Database, WAL, backup, and key-envelope disclosure | SQLCipher, wrapped keys, and E2E encryption | Non-exportable keys and unlock authentication remain intact |
+| Vault database tampering or rollback | Stop on a mismatch with the independent witness revision and hash | The witness cannot be rolled back at the same time |
+| Out-of-scope operations or another user's grant | Enforce owner signature and matching OAuth sub, grant ID, action, and resource | Trust owner and AS keys |
+| Duplicate or concurrent requests and crashes | Witness, then database commit, then disclosure; consume a use | Trust SQLite locking/fsync and witness CAS |
+| Malicious extension input | Pin role, TTL, and provider; prohibit arbitrary SQL | Trust actual PostgreSQL privileges and the trusted issuer |
+| Compromised AI/tool dependencies | Bind the grant to executable hash and recipient; expose no keys over HTTP | Root-managed broker and disposable UIDs are implemented and Linux isolation is tested. macOS software runs in native CI; physical-key tests are excluded |
+| PC theft | Design uses Secure Enclave with user presence and TPM with a PIN | Physical devices have not been tested. Seizure of an entire running, unlocked PC remains unresolved |
+| Compromised service, OS, or compiler | Outside the guarantee as a TCB compromise | Requires an independent guardian, least privilege, update approval, and reproducible-build verification |
 
-## 信頼する要素
+## Trusted components
 
-ownerのgrant承認、OAuth ASの署名、deviceとguardianの独立した鍵保護・操作承認、Runner、検証コード、暗号ライブラリ、SQLCipherとOpenSSL等のCコード、カーネル、ハードウェア、時計、乱数、コンパイラ／検証器をTCBに含めます。自前Rustコードの`unsafe_code=forbid`は依存CやOSの安全性を証明しません。
+The trusted computing base includes owner grant approval, OAuth AS signatures, independent device and guardian key protection and approval, the Runner, verification code, cryptographic libraries, C code such as SQLCipher and OpenSSL, the kernel, hardware, clock, randomness, and compiler/verifiers. `unsafe_code=forbid` in the project's Rust code does not prove the safety of C dependencies or the OS.
 
-本実装の`device_public_key`と`guardian_public_key`は異なる鍵であることしか検証しません。異なる物理機器、利用者、UID、クラウドアカウントであることを証明するattestationはありません。非エクスポート性もAPI応答と登録運用に依存します。
+The implementation only checks that `device_public_key` and `guardian_public_key` are different keys. It does not attest that they belong to different physical devices, people, UIDs, or cloud accounts. Non-exportability also depends on API responses and enrollment procedures.
 
-localとhostedで機構は同一です。localでも独立witnessを必要とします。同じディスクにVaultとwitnessを置き、両者のスナップショットを戻せる配置では、巻き戻し耐性は成立しません。完全オフラインの一台構成で同等の耐性を出すには、TPM NV等による非巻き戻し状態の実装が必要です（未実装）。
+Local and hosted deployments use identical mechanisms. An independent witness is required even locally. Keeping Vault and its witness on the same disk, with snapshots that can roll both back, does not provide rollback resistance. Equivalent resistance in a fully offline single-machine deployment would require non-rollback state such as TPM NV; that is not implemented.
 
-## 失効・可用性
+## Revocation and availability
 
-線形化点は使用回数を消費する永続コミットです。それより前に確定した失効は要求を拒否します。既にコミットされた処理・返却した秘密を後の失効で取り消すことはできません。
+The linearization point is the durable commit that consumes a use. Revocation committed before that point rejects the request. Later revocation cannot undo a committed operation or recall a returned secret.
 
-witness成功後にDB確定が失敗すると停止します。過去のバックアップを「最新版」として自動採用しません。owner承認済みの最新checkpointに対するquarantineで旧IDを永久廃止し、新IDに再承認できます。鍵rotationとwitnessを保持するquarantine／再認可は実装済みです。復号鍵喪失時は既存の復旧用保護領域が必要で、復旧鍵がなければデータは復元できません。witnessの同時巻き戻しや最新状態喪失からの権限復活は許しません。時計の逆行に強い期限管理は未実装で、信頼できる時刻を前提にします。
+If the witness succeeds but the database commit fails, processing stops. An old backup is never automatically adopted as the latest state. Quarantine against a current owner-approved checkpoint permanently retires the old ID, after which a new ID may be authorized. Key rotation and witness-preserving quarantine/reauthorization are implemented. Losing a decryption key requires a previously prepared recovery protection domain; without a recovery key, the data cannot be restored. Simultaneous witness rollback or loss of its latest state cannot restore permissions. Deadline handling resilient to clock rollback is not implemented; trusted time is assumed.
 
-DoS、トラフィック量・DB容量・鍵envelopeの公開鍵fingerprint等のメタデータ漏洩、OSメモリのフォレンジック、アンロック中の物理攻撃は今回の保証に含みません。ゼロ化はベストエフォートで、全ライブラリの複製やswapまでの保証ではありません。
+The guarantee excludes DoS, metadata leakage such as traffic volume, database size, and public-key fingerprints in envelopes, OS memory forensics, and physical attacks while unlocked. Zeroization is best effort and does not cover every library copy or swap.

@@ -77,10 +77,10 @@ if binary.exists():manifest['binary']={'path':str(binary),'sha256':sha(binary)}
 manifest['tool_digests']={name:sha(root/'.tools'/name) for name in ('tla2tools.jar','libsqlite3-sys-0.39.1.crate')}
 manifest['logs_sha256']={str(f.relative_to(out)):sha(f) for f in out.rglob('*') if f.is_file() and f.name!='sources.json'}
 (out/'manifest.json').write_text(json.dumps(manifest,indent=2,ensure_ascii=False)+'\n')
-lines=['# 検証実行結果','',f'UTC: {stamp}',f'チェック成功: {passed} / 全予定試験実行: {complete} / ソース不変: {same}','', '**この記録はLinux検証です。製品の本番利用判定はMac実行証跡と統合してrelease-evidence.pyで評価します。導入先の受入署名を代行しません。**','', '| 検査 | 結果 | ログ |','|---|---|---|']
-for r in results:lines.append(f"| {r['name']} | {'PASS' if r['passed'] is True else 'FAIL' if r['passed'] is False else 'NOT_RUN'} | [{r.get('log','未実行')}]({r.get('log','')}) |")
+lines=['# Verification results','',f'UTC: {stamp}',f'Checks passed: {passed} / All scheduled checks executed: {complete} / Source unchanged: {same}','', '**This record covers Linux verification. release-evidence.py combines it with macOS execution evidence to evaluate software release readiness. It does not sign acceptance for a deployment.**','', '| Check | Result | Log |','|---|---|---|']
+for r in results:lines.append(f"| {r['name']} | {'PASS' if r['passed'] is True else 'FAIL' if r['passed'] is False else 'NOT_RUN'} | [{r.get('log','Not run')}]({r.get('log','')}) |")
 assurance=os.path.relpath(root/'docs/ASSURANCE.md',out)
-lines+=['',f'[保証範囲]({assurance}) を参照。TPMはシミュレータのみ。Linuxの別UID隔離はos-isolationログが正本。物理鍵実験は利用者指定で除外。Macクロスビルドは対応ログが正本で、Mac OS上の実行を意味しない。全体refinementは未証明。','',f"対象ソース一覧 SHA-256: `{manifest['source_manifest_sha256']}`",'','同一環境による自己記録であり、独立した認証機関の証明ではありません。']
+lines+=['',f'See the [assurance scope]({assurance}). TPM execution uses a simulator only. The os-isolation log is authoritative for separate-UID isolation on Linux. Physical-key experiments are excluded at the requester\'s direction. The macOS cross-build log records compilation, not execution on macOS. Whole-system refinement is unproven.','',f"Source inventory SHA-256: `{manifest['source_manifest_sha256']}`",'','This is a self-recorded result from the same environment, not certification by an independent authority.']
 (out/'report.md').write_text('\n'.join(lines)+'\n')
 print('Evidence:',out,flush=True)
 raise SystemExit(0 if passed else 1)

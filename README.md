@@ -1,25 +1,25 @@
 # vault-rs
 
-Rustによる二者承認・E2E暗号の秘密情報管理。Mac/Linuxで同じHTTPS・認可・暗号実装を使い、OAuth＋DPoPに加えて独立したdevice/guardian承認を必須にします。
+End-to-end encrypted secret management in Rust with two-party authorization. macOS and Linux use the same HTTPS, authorization, and cryptographic implementation. Independent device and guardian approval is required in addition to OAuth and DPoP.
 
-本番利用の条件は[13の受入条件](docs/PRODUCTION_GOAL.md)で定義しています。製品の判定はLinuxとMacの同一sourceの証跡を統合した `evidence/release.json`、導入先の判定は署名付き受入を検査する `vault-rs readiness` です。物理鍵実験だけを利用者指定で除外します。[保証範囲](docs/ASSURANCE.md)と[証明の契約](docs/PROOF_CONTRACT.md)に、直接証明した命題とcrypto/OS/DB等の前提を記載しています。
+Production requirements are defined by [13 acceptance criteria](docs/PRODUCTION_GOAL.md). The software release decision is recorded in `evidence/release.json`, combining Linux and macOS evidence for the same source. Deployment acceptance is checked by `vault-rs readiness` against signed evidence. Only physical-key experiments are excluded at the requester's direction. The [assurance scope](docs/ASSURANCE.md) and [proof contract](docs/PROOF_CONTRACT.md) distinguish directly verified properties from assumptions about cryptography, the OS, databases, and other dependencies.
 
-## 実装した機構
+## Implemented mechanisms
 
-- OAuth＋DPoPに加え、deviceと独立guardianの要求全体への署名を必須化。tokenとDPoP秘密鍵を同時に盗んでも追加の独立承認が必要です。
-- owner署名でsubject・秘密ID／版・操作・実行物と引数・実行インスタンス・受信鍵・期限・回数を固定。root管理brokerが実行物を固定し、witnessで一度限りのUIDを割り当てたツールへ、専用stdinで許可済み秘密値だけを渡します。
-- 秘密ごとのDEKを2-of-2に分割し、各shareを別のP-256 HPKE鍵にラップ。返却データもrecipientにHPKE暗号化。Vaultは静的秘密のdevice shareを取得しません。
-- SQLCipherでDB／WALを暗号化。DB鍵と発行器設定もハードウェア鍵でラップ。開いているDB鍵・返却済み秘密は実行プロセス内に存在します。
-- 独立witnessのCAS→DB確定→開示の順序を強制。巻き戻し／クラッシュはfail closed。owner署名による復旧は古いgrant IDの永久廃止だけを許可します。
-- PostgreSQL動的認証情報、限定role／TTL、冪等発行、失効、期限回収。Wasm extensionはhost importなし、メモリ／燃料制限付きで、管理資格情報を受け取りません。
-- 標準対象はSecure Enclave搭載MacとTPM 2.0搭載Linux。外部PKCS#11は任意。ソフトウェア鍵への自動フォールバックはありません。
-- 署名付きrelease・review・deployment証跡をsource／binary／config／host／有効期間に束縛し、13条件×2OSの必要証跡を検査して本番起動を判定します。
+- Require device and independent guardian signatures over the complete operation, in addition to OAuth and DPoP. Stealing both the token and DPoP private key still leaves independent approval required.
+- Bind the subject, secret ID/version, action, executable and arguments, execution instance, recipient key, validity period, and use count in an owner-signed grant. A root-managed broker fixes the executable and passes only the authorized secret through a dedicated stdin pipe to a tool running under a UID allocated once by the witness.
+- Split each secret's data encryption key into two shares, both required for recovery, and wrap each share with a separate P-256 HPKE key. Responses are also HPKE-encrypted to the recipient. Vault never obtains the device share of a static secret.
+- Encrypt the database and WAL with SQLCipher. Wrap database keys and issuer configuration with hardware keys. An open database key and released plaintext exist in the executing process's memory.
+- Enforce independent witness CAS, then database commit, then disclosure. Rollback and crashes fail closed. Owner-authorized recovery can only retire an old grant ID permanently.
+- Issue PostgreSQL credentials with restricted roles and TTLs, idempotent issuance, revocation, and expiry cleanup. Wasm extensions have no host imports, run under memory and fuel limits, and never receive administrative credentials.
+- Target Macs with Secure Enclave and Linux systems with TPM 2.0. External PKCS#11 devices are optional. There is no automatic fallback to software keys.
+- Bind signed release, review, and deployment evidence to the source, binary, configuration, host, and validity period. Check all 13 criteria on both OSes before accepting production startup.
 
-local／hostedは同じHTTPS・暗号・認可実装を使います。単独利用でも独立guardianと巻き戻されないwitnessが必要です。承認用native鍵は対話式です。サービス用resident鍵は起動時にhardware protectorで解錠し、以降のHTTPS／witness処理ではUI／PINを繰り返し要求しません。resident鍵自体の非エクスポート性は主張しません。
+Local and hosted deployments use the same HTTPS, cryptography, and authorization. Even single-user operation requires an independent guardian and a witness that cannot be rolled back with Vault. Native approval keys are interactive. Resident service keys are unlocked by a hardware protector at startup; subsequent HTTPS and witness operations do not repeatedly request UI interaction or a PIN. Resident keys themselves are not claimed to be non-exportable.
 
-## 検証
+## Verification
 
-Linux: Rustup、Cコンパイラ、pkg-config、OpenSSL開発ヘッダ、Python 3、Java 21、Node.js 24、Docker。MacのビルドにはXcode Command Line ToolsとOpenSSLが必要です。
+Linux prerequisites: Rustup, a C compiler, pkg-config, OpenSSL development headers, Python 3, Java 21, Node.js 24, and Docker. macOS builds require Xcode Command Line Tools and OpenSSL.
 
 ```sh
 python3 scripts/restore-vendor.py
@@ -27,17 +27,21 @@ bash scripts/prepare-tools.sh
 python3 scripts/verify.py --with-docker --macos-cross
 ```
 
-Kaniで製品と同じpolicyコード、TLCで有限並行モデル、実行試験でHTTPS／暗号／DB／別UID隔離／sandboxを検査します。さらにlocked build、依存監査、別targetへのクリーン再ビルドを行います。[保存した証跡](evidence/latest/report.md)にコマンド・結果・source／log／binaryのSHA-256を記録しています。Dockerを省略した項目はNOT_RUNです。全体の安全性証明や第三者認証ではありません。
+Kani checks the policy code used by the product; TLC checks a finite concurrent model; execution tests cover HTTPS, cryptography, databases, separate-UID isolation, and sandboxing. Verification also includes locked builds, dependency auditing, and a clean rebuild in a separate target directory. [Saved evidence](evidence/latest/report.md) records commands, results, and source/log/binary SHA-256 digests. Checks skipped without Docker are marked NOT_RUN. This is not a proof of the entire system's safety or third-party certification.
 
 ```sh
 cargo run --locked -p vault-rs -- readiness
 cargo run --locked -p vault-rs -- observe --config /absolute/path/config.json
 ```
 
-証跡なしのreadinessは非ゼロ終了します。通常の`serve`／`witness`／`broker`は`--acceptance`必須です。検証専用の`--verification-run`は本番判定をtrueにせず、serverのbindはloopback限定です。これを本番受入の回避に使わないでください。
+Without evidence, `readiness` exits nonzero. Normal `serve`, `witness`, and `broker` commands require `--acceptance`. The test-only `--verification-run` option never sets production readiness to true and restricts server binding to loopback. Do not use it to bypass production acceptance.
 
-## 利用インターフェース
+## Interfaces
 
-`initialize-storage`、`seal`、`protect-config`、`generate-service-key`、`rotate-storage`、`rewrap-config`、`measure-bundle`、`broker`、`approve`、`serve`、`witness`、`observe`、`readiness`を提供します。owner／guardianの承認は、型を固定したJSONとネイティブ鍵の確認画面／PINを通します。汎用OAuth同意UI・組織管理UIは含みません。
+Commands include `initialize-storage`, `seal`, `protect-config`, `generate-service-key`, `rotate-storage`, `rewrap-config`, `measure-bundle`, `broker`, `approve`, `serve`, `witness`, `observe`, and `readiness`. Owner and guardian approval use typed JSON and native-key confirmation prompts or PINs. A general-purpose OAuth consent UI and organization-management UI are not included.
 
-[鍵・OAuth・復旧の運用](docs/OPERATIONS.md)、[brokerと受入](docs/BROKER.md)、[プロトコル](docs/PROTOCOL.md)、[脅威モデル](docs/THREAT_MODEL.md)、[鍵登録と実機検証](docs/HARDWARE.md)、[構成例](examples/)を参照してください。構成例はプレースホルダーであり、そのまま起動できません。テスト用PEMは公開済み合成データです。
+See [key, OAuth, and recovery operations](docs/OPERATIONS.md), [broker and acceptance](docs/BROKER.md), [the protocol](docs/PROTOCOL.md), [the threat model](docs/THREAT_MODEL.md), [key enrollment and physical testing](docs/HARDWARE.md), and [configuration examples](examples/). Example configurations contain placeholders and cannot be started unchanged. Test PEM files contain public synthetic data.
+
+## Project language
+
+Use English for repository documentation, code comments, user-facing messages, generated reports, commit messages, and pull request descriptions.

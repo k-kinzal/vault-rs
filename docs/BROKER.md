@@ -1,56 +1,56 @@
-# Broker・承認・本番受入
+# Broker, approval, and production acceptance
 
-この手順はMac/Linuxの実装契約を説明します。物理鍵実験は利用者指定で除外し、実装・ソフトウェア試験・鍵登録の前提を区別します。本番受入の状態はPRODUCTION_GOAL.mdとASSURANCE.mdが正本です。
+This guide describes the macOS/Linux implementation contract. Physical-key experiments are excluded at the requester's direction; implementation, software tests, and key-enrollment assumptions are distinguished. PRODUCTION_GOAL.md and ASSURANCE.md define production acceptance status.
 
-## 身元と実行物
+## Identity and executable bundles
 
-AIはbrokerと異なる非特権UIDで動かします。AIにsudo権限やroot管理ファイルの書込権限があればこの境界は成立しません。brokerは管理者が起動するone-shotプロセスです。公開socket、任意message署名API、AIが使えるsudo wrapperは設けません。
+Run the AI under an unprivileged UID different from the broker's. This boundary does not hold if the AI has sudo access or can write root-managed files. The broker is a one-shot process started by an administrator. It exposes no public socket, arbitrary-message signing API, or sudo wrapper usable by the AI.
 
-bundle JSONは`entrypoint`、`arguments`、`files[{path,contents,executable}]`です。contentsはbase64url（paddingなし）。最大32MiB、512ファイル。全ファイルと引数をhashに含め、root管理directoryへcreate_newで展開し、ファイル444/555・directory555へ固定します。symlinkや相対pathの脱出を拒否します。コードを追加／変更したら新しいowner承認が必要です。
+Bundle JSON contains `entrypoint`, `arguments`, and `files[{path,contents,executable}]`. Contents use unpadded base64url. Limits are 32 MiB and 512 files. All files and arguments contribute to the hash. Files are extracted with create_new into a root-managed directory, then fixed to modes 444/555 with directories at 555. Symlinks and relative-path escapes are rejected. Adding or changing code requires new owner approval.
 
 ```sh
 vault-rs measure-bundle --bundle /etc/vault-rs/tool.bundle.json
 ```
 
-実行物のOSライブラリ／interpreterはTCBです。bundle以外の依存を勝手に取得して実行するツールを、hashだけで安全と判断しません。Python等の利用者インストール・親プロセスの環境を引き継ぎません。依存ファイルはbundleに含め、system runtimeも承認された配置先で管理します。
+OS libraries and interpreters used by the executable are part of the TCB. A hash alone does not make a tool safe if it independently downloads and executes dependencies outside its bundle. User installations such as Python packages and the parent process's environment are not inherited. Include dependency files in the bundle and manage the system runtime in the accepted deployment.
 
-UIDは専用namespaceのwitness revisionから一度だけ割り当てます。`uid_base >= 10000`、`uid_limit <= 2000000000`、既存OS account/groupとAI UIDの範囲外が必要です。witness／namespace／範囲のリセット、他brokerによる同じUID範囲の使用は禁止です。使い切った範囲は再利用せず、新しい未使用範囲・namespaceを管理者が登録します。broker用allocatorには、そのoperatorだけを認める独立したWitnessAuthorityの配置を使います。
+UIDs are allocated once from the witness revision in a dedicated namespace. Require `uid_base >= 10000`, `uid_limit <= 2000000000`, and a range that excludes existing OS accounts/groups and the AI UID. Never reset the witness, namespace, or range, or share a UID range between brokers. Do not recycle an exhausted range; an administrator must register a new unused range and namespace. The broker allocator uses an independent WitnessAuthority deployment that authorizes only its operator.
 
-## 一回の利用
+## One operation
 
-brokerのstdin/stdoutは管理者が保持するprivate pipeです。端末・FIFO・制御ソケットをAIと共有しません。作業ツールへのstdinは別に生成する専用pipeです。
+The broker's stdin/stdout are private pipes held by the administrator. Do not share a terminal, FIFO, or control socket with the AI. The workload receives a separate dedicated stdin pipe.
 
-1. `broker --config ... --acceptance ...`を管理者として起動。
-2. brokerが公開IntentをJSON一行で出力。recipient、DPoP公開JWK、instance、artifact hash、秘密のID／版／hash、subject、device公開鍵が含まれます。秘密鍵は出ません。
-3. ownerがこのIntentを確認しGrantに署名。ASが同じsubject、grant ID、DPoP thumbprint、scopeに束縛したアクセストークンを発行。管理者が`{"grant":<Signed<Grant>>,"access_token":"..."}`をstdin一行で渡します。`oauth`設定がある場合はtokenを省略でき、brokerが認可URLを出力してloopback callbackを待ちます。PKCE verifier／DPoP鍵はbroker内に保持し、認可コードをASへ交換します。実ASとの試験は`test-oauth.sh`を参照。
-4. brokerがinstallとchallengeを実行し、完全なOperationを公開出力。独立guardianが内容を確認し署名します。
-5. 管理者が`{"guardian_signature":"..."}`を渡すと、brokerは他の全認可を検査した後でdevice鍵の確認画面／PINを要求します。
-6. witnessでUIDを予約し、release／issue、SDKでの検証・復号、別UIDの実行へ進みます。ツールに渡すのは許可された秘密値だけです。
+1. Start `broker --config ... --acceptance ...` as the administrator.
+2. The broker prints a public Intent as one line of JSON: recipient, public DPoP JWK, instance, artifact hash, secret ID/version/hash, subject, and device public key. No private keys are emitted.
+3. The owner inspects the Intent and signs a Grant. The AS issues an access token bound to the same subject, grant ID, DPoP thumbprint, and scope. The administrator supplies `{"grant":<Signed<Grant>>,"access_token":"..."}` as one stdin line. With `oauth` configured, the token may be omitted; the broker prints an authorization URL and waits for the loopback callback. It retains the PKCE verifier and DPoP key internally and exchanges the authorization code with the AS. See `test-oauth.sh` for real-AS tests.
+4. The broker performs install and challenge, then publicly outputs the complete Operation. An independent guardian reviews and signs it.
+5. The administrator supplies `{"guardian_signature":"..."}`. After checking every other authorization condition, the broker requests device-key confirmation or a PIN.
+6. Reserve a UID through the witness, perform release/issue, verify and decrypt through the SDK, and execute under the separate UID. Only the authorized secret value reaches the tool.
 
-`approve --key-config /etc/vault-rs/owner.json --kind grant`はstdinのGrantを型付きで読み、owner-grant domainに署名したSigned<Grant>を返します。`guardian-operation`、`revoke`、`quarantine`、`release`、`review`、`deployment`も同様です。guardianの出力はSigned<Operation>なので、そのsignature fieldをbrokerに渡します。generic JSON Valueのkey順に依存して署名してはいけません。
+`approve --key-config /etc/vault-rs/owner.json --kind grant` reads a typed Grant from stdin and returns Signed<Grant> under the owner-grant domain. The same interface supports `guardian-operation`, `revoke`, `quarantine`, `release`, `review`, and `deployment`. Guardian output is Signed<Operation>; pass its signature field to the broker. Do not sign based on the key ordering of a generic JSON Value.
 
-承認用native helperは対話式です。witness/operator署名とservice復号にはresident keyを選択でき、起動時だけnative protectorを解錠します。以降のリクエストにはPINを要求しません。`test-deployment.sh`で実CLIの起動・二人の取得・再起動・回数保存を検証します。PINを環境変数／設定へ平文保存しません。30秒の認可期限内に承認が終わらなければ拒否し、新しいOperationを承認します。
+Native approval helpers are interactive. Witness/operator signing and service decryption may use resident keys, unlocking the native protector only at startup. Subsequent requests do not require a PIN. `test-deployment.sh` verifies actual CLI startup, retrieval by two users, restart, and preservation of use counts. Never store plaintext PINs in environment variables or configuration. If approval does not finish within the 30-second authorization lifetime, reject it and approve a new Operation.
 
-Linuxの試験では別UIDによるメモリ／FD／鍵ファイル読取・実行物書換え・broker直接起動を拒否し、正規stdinだけの受渡しを確認します。Linuxにはno_new_privs、core禁止、資源制限を適用します。仮想アドレス空間の上限はLinux 512 MiB、Macは起動時にOSから観測した現在の仮想サイズ＋512 MiBです（dyld共有mappingを含むため同じ絶対値を使いません）。これは常駐メモリの上限ではなく、DoS耐性の保証でもありません。Mac ARM64のRust／Swiftはクロスビルド済みです。root brokerから専用のGUIユーザーへ`launchctl asuser`とUID変更を行い、Data Protection Keychainを呼ぶ実装です。Mac上のOS隔離はnative CIログで判定します。物理SE／Keychain実機試験は除外です。
+Linux tests reject memory, FD, and key-file reads, executable modification, and direct broker invocation from another UID, while checking delivery solely through authorized stdin. Linux applies no_new_privs, disables core dumps, and enforces resource limits. The virtual-address-space limit is 512 MiB on Linux and the OS-observed startup virtual size plus 512 MiB on macOS; the same absolute limit is unsuitable because macOS includes dyld shared mappings. This is neither a resident-memory limit nor a DoS-resistance guarantee. Rust and Swift have been cross-built for Mac ARM64. The implementation switches from the root broker to a dedicated GUI user through `launchctl asuser` and a UID change to access Data Protection Keychain. Native CI logs establish macOS OS isolation. Physical Secure Enclave/Keychain device tests are excluded.
 
-timeoutではprocess groupを終了しますが、setsidした子孫全体の終了は保証しません。子孫は再利用されないUIDと既に許可された秘密値しか持ちません。完全なjob lifecycle制御は別の残課題です。
+A timeout terminates the process group, but termination of all descendants that have called setsid is not guaranteed. Descendants retain only their never-reused UID and already-authorized secret. Complete job lifecycle control remains a separate limitation.
 
-## 復旧
+## Recovery
 
-witnessとDBが不整合なら、自動で古いsnapshotを採用しません。
+Do not automatically adopt an old snapshot when the witness and database disagree.
 
-1. owner署名済みGrantを`POST /v1/checkpoint`へ送り、独立witnessの現在値を取得。
-2. `{vault,grant,expected:{revision,hash}}`に`approve --kind quarantine`で署名し、`POST /v1/quarantine`へ送信。
-3. witness CASとDB確定により、そのIDを永久廃止。別の未使用IDでowner承認をやり直します。使い残した回数の復活はしません。
+1. Send an owner-signed Grant to `POST /v1/checkpoint` to obtain the current independent witness value.
+2. Sign `{vault,grant,expected:{revision,hash}}` with `approve --kind quarantine` and send it to `POST /v1/quarantine`.
+3. Witness CAS followed by database commit permanently retires that ID. Obtain new owner approval for another unused ID. Unspent uses are not restored.
 
-途中失敗なら新しいcheckpointを取得して再承認が必要です。quarantine後のprovider cleanupだけが失敗した場合は、同じgrantにowner-signed `/v1/revoke`を送って再試行できます。DB／E2E／設定鍵のrotation、鍵紛失時の停止と独立witnessを保持する復旧手順は[OPERATIONS.md](OPERATIONS.md)にあります。失った復号鍵を無条件に再生するbackdoorはありません。witness最新状態も失った場合は旧grantの再開を拒否します。
+After an intermediate failure, obtain a fresh checkpoint and new approval. If only provider cleanup fails after quarantine, retry by sending owner-signed `/v1/revoke` for the same grant. [OPERATIONS.md](OPERATIONS.md) describes database, E2E, and configuration-key rotation, shutdown after key loss, and recovery that preserves the independent witness. There is no backdoor that unconditionally regenerates a lost decryption key. If the latest witness state is also lost, old grants cannot resume.
 
-## 本番受入
+## Production acceptance
 
-`AcceptanceFiles{policy,bundle,logs}`をroot管理pathに置きます。物理鍵試験を除外する場合は`allow_physical_test_exclusion:true`をpolicyに、`physical_tests_excluded:true`を署名対象Releaseに記録します。他の受入条件は残ります。policyは別々に登録したrelease/review/deployment公開鍵、minimum_epoch、有効期間の上限（最大30日）。bundleはSigned<Release>、Signed<Review>、Signed<Deployment>です。
+Place `AcceptanceFiles{policy,bundle,logs}` under root-managed paths. To exclude physical-key tests, record `allow_physical_test_exclusion:true` in the policy and `physical_tests_excluded:true` in the signed Release. Other acceptance criteria remain mandatory. The policy contains separately enrolled release/review/deployment public keys, minimum_epoch, and a maximum validity period of at most 30 days. The bundle contains Signed<Release>, Signed<Review>, and Signed<Deployment>.
 
-Releaseはsource hash、Mac/Linux各binary hash、G01〜G13×両OSの結果とmethod・ログpath・SHA-256を指定します。Reviewは同じreleaseのhashと未解決指摘0を承認します。Deploymentは同じrelease、実host、実binary、設定hash、OSと期限を束縛します。`observe --config ...`で実測値を出せますが、acceptance署名は作りません。
+Release specifies the source hash, each macOS/Linux binary hash, and results, methods, log paths, and SHA-256 digests for G01 through G13 on both OSes. Review approves the same release hash with zero unresolved findings. Deployment binds that release to the actual host, binary, configuration hash, OS, and expiry. `observe --config ...` emits measurements but does not create acceptance signatures.
 
-readinessは署名・完全性・method・hash・期限を検査します。起動時に検査し、受入証跡の最短期限でプロセスを停止します（監視間隔1秒、信頼できる時計を前提）。新しい受入には明示的な再起動が必要です。検証者が実際に試験したか、三つの鍵が異なる管理者か、ログ内容が定理を証明するかは、承認者の責任と独立レビューが必要です。署名検査がログ内容の真実性を自動証明するとは主張しません。
+Readiness checks signatures, completeness, methods, hashes, and expiry. Startup performs these checks; the process stops at the earliest evidence expiry, with a one-second monitoring interval and a trusted-clock assumption. New acceptance requires an explicit restart. Whether tests were actually performed, whether the three keys belong to different administrators, and whether log contents establish the claimed properties require accountable approvers and independent review. Signature verification does not automatically prove that log contents are true.
 
-単体テスト中のsynthetic acceptance成功例は検査器を試すためだけのものです。証跡としてexportせず、本番判定の成功として報告しません。
+Synthetic successful acceptance fixtures in unit tests only exercise the validator. They are not exported as evidence or reported as successful production acceptance.

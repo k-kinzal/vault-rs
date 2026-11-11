@@ -1,37 +1,37 @@
-# 機械検証と実装の対応
+# Machine verification and implementation correspondence
 
-証明対象は製品が直接使う `crates/policy/src/lib.rs` と `wire.rs` です。暗号・OS・DBの原始機能について下記の契約を置き、認可判定・field対応・開示順序を検証します。検証した命題、有限探索、実行試験、信頼する原始機能を区別します。
+The proof targets are `crates/policy/src/lib.rs` and `wire.rs`, which the product uses directly. Under the contracts below for cryptographic, OS, and database primitives, verification covers authorization decisions, field correspondence, and disclosure ordering. Proven properties, finite exploration, execution tests, and trusted primitives are distinguished.
 
-## 直接検証する実コード
+## Production code checked directly
 
-- `consume` の成功条件は、全認可証拠、record binding、witness、非失効・非ロック、epoch/sequence、有効期間、残回数、非overflowと同値。成功後は残回数が1減り、sequenceが1増え、他のfieldを保存します。State/Requestの全bit幅を検査します。
-- `authorize_and_commit` は認可後だけpersistを呼び、その成功後だけ `Committed<T>` を返します。`ordered_commit` はwitness成功後だけDB commitを呼びます。任意のstate・request・証拠・両永続処理の成功／失敗に対し、開示可能性、実行順、回数が宣言的仕様に一致します。常に拒否するだけの変更も検出します。
-- Grant/Operation/Challenge/Trust/RecordContext/AccessClaims/DpopClaimsは実サービスと証明で型定義を共有します。owner、record、challenge、実行物・受信鍵・instance、OAuth subject/audience/grant/scope/期限、DPoP key/nonce/target/method/token hash/時刻を実fieldから直接比較します。手動で作ったBindingへの変換を仮定しません。
-- `Operation::request` は実際のepoch/sequence/not_before/expires/nowを直接検証します。DB LedgerはpolicyのStateをそのまま持ち、返されたState全体を保存します。
-- ScopeSetは256 byte以内のRFC6749 ASCII scope文法を解釈し、認識する完全なtokenだけに権限を与えます。実step/finishを独立したtrie仕様と比較し、初期・全byteに対する状態保存／同時拒否・終了の3補題を機械検証します。逐次foldと拒否伝播の構造帰納法で任意有限入力、従って256 byte全域を扱います。全ループを別々に展開して比較したKani runの成功とは記録しません。対応と帰納法はSCOPE_PROOF.mdに記載します。未知scopeは権限を与えません。
-- 要求期限はgrant・challenge・実際の署名済みaccess token・最大30秒の最小値。device unwrap後とworkload起動直前にも現在時刻で確認します。
-- 実32 byteの `split32` / `join32` の索引を含む全処理について復元性と任意候補秘密との両立を確認します。乱数の一様性や暗号方式そのものの安全性はこの代数の結論ではありません。
-- UID割当、永久廃止、時間区間のoverflow、受入method完全性、G04/G05だけの物理試験除外を検証します。
+- Success of `consume` is equivalent to the conjunction of all authorization evidence, record binding, witness, non-revoked/unlocked status, epoch/sequence, validity interval, remaining uses, and absence of overflow. Success decrements remaining uses by one, increments sequence by one, and preserves every other field. Checks cover the full bit widths of State and Request.
+- `authorize_and_commit` calls persist only after authorization and returns `Committed<T>` only after persistence succeeds. `ordered_commit` calls database commit only after witness success. For arbitrary state, request, evidence, and success/failure of both persistence operations, disclosure eligibility, ordering, and counts agree with the declarative specification. Changes that always deny are also detected.
+- Grant/Operation/Challenge/Trust/RecordContext/AccessClaims/DpopClaims share type definitions between the production service and proofs. Owner, record, challenge, executable/recipient/instance, OAuth subject/audience/grant/scope/expiry, and DPoP key/nonce/target/method/token hash/time are compared directly from actual fields. No conversion to a manually assembled Binding is assumed.
+- `Operation::request` directly checks the actual epoch/sequence/not_before/expires/now fields. The database Ledger embeds policy State unchanged and stores the complete returned State.
+- ScopeSet parses up to 256 bytes of RFC 6749 ASCII scope grammar and grants permissions only for recognized complete tokens. The actual step/finish functions are compared against an independent trie specification through three machine-checked lemmas: initialization, state preservation or simultaneous rejection for every byte, and finalization. Structural induction over sequential fold and rejection propagation covers arbitrary finite input, including the full 256-byte domain. This is not recorded as a successful Kani run comparing two separately unrolled complete loops. SCOPE_PROOF.md describes correspondence and induction. Unknown scopes confer no permissions.
+- Request expiry is the minimum of grant expiry, challenge expiry, the actual signed access token's expiry, and a maximum of 30 seconds. Current time is rechecked after device unwrap and immediately before workload launch.
+- The actual 32-byte `split32` / `join32` operations, including every indexed step, are checked for reconstruction and consistency with any candidate secret. Uniform randomness and cryptographic security do not follow from this algebraic result.
+- Verification covers UID allocation, permanent retirement, time-interval overflow, completeness of acceptance methods, and physical-test exclusion for G04/G05 only.
 
-等値比較のgeneric証明はu128等でinstantiateします。UUID/String/IssueSpec等のEq実装は等値関係として振る舞う契約です。JSONからその型を構成するserde全体を証明したとは主張しません。Kani/CBMCとRust変換の健全性は信頼基盤です。
+Generic equality proofs are instantiated with types such as u128. Eq implementations for UUID/String/IssueSpec and similar types are assumed to behave as equality relations. This does not prove all of serde's construction of those types from JSON. Kani/CBMC and the soundness of Rust translation are part of the trusted base.
 
-`Committed` は公開field・Clone・Deserializeを持たず、releaseで消費します。外部構築と二重消費のcompile-fail試験があります。trusted Rust callerが虚偽のEvidenceやpersist closureを与えることを型だけで防ぐものではありません。HTTP入力からその値やclosureを作れず、全開示経路がprotocol検証とcontrollerを通ることはソースレビューとadapter fault試験で確認します。
+`Committed` has no public fields, Clone, or Deserialize, and is consumed by release. Compile-fail tests cover external construction and double consumption. The type alone cannot prevent a trusted Rust caller from supplying false Evidence or a dishonest persist closure. Source review and adapter fault tests check that HTTP input cannot construct these values or closures and that all disclosure paths pass through protocol verification and the controller.
 
-## 有限状態モデル
+## Finite-state model
 
-TLCは一つの既に登録されたgrant、4 request identities、使用回数2、challenge発行2、管理操作2、同じ動的発行への試行2を探索します。challenge再利用／交換、nonce、witness予約とDB commitの分離、並行要求、途中crash、DBの過去世代復元、失効／quarantineの途中crash、pending発行の再試行と完了を含みます。
+TLC explores one already-installed grant, four request identities, two uses, two challenge issuances, two administrator operations, and two attempts at the same dynamic issuance. It includes challenge reuse/replacement, nonces, separate witness reservation and database commit, concurrent requests, intermediate crashes, restoration of past database generations, crashes during revoke/quarantine, and pending-issue retries and completion.
 
-TypeOK、NoUnauthorizedRelease、NoReplay、BoundedRelease、CommitBeforeDisclosure、OneCredentialPerOperationを確認します。同じ動的leaseの再送は許し、異なる操作のsequence再利用は拒否する仕様です。device/guardian/witness/nonce/commit順序/idempotenceを弱めた6条件は名前を指定した反例を必要とします。正規read、同一issueの二回答、admin予約後crashからのquarantine到達も確認し、全拒否による空虚な成功を避けます。
+Checks cover TypeOK, NoUnauthorizedRelease, NoReplay, BoundedRelease, CommitBeforeDisclosure, and OneCredentialPerOperation. The specification permits retransmission of the same dynamic lease but rejects sequence reuse across different operations. Six weakened conditions for device/guardian/witness/nonce/commit ordering/idempotence must produce named counterexamples. Coverage also checks an authorized read, two replies to an identical issue, and quarantine after a crash following administrator reservation, avoiding vacuous success through blanket denial.
 
-モデルと実装の対応は [REVIEW.md](REVIEW.md) にあります。TLCは有限探索とfingerprintを使い、無限状態の帰納証明、TLA全体からサービス全体へのsimulation theorem、liveness証明ではありません。PostgreSQLのidempotenceはSQL transaction/advisory lockの契約であり、モデルだけでPostgreSQLを証明していません。
+[REVIEW.md](REVIEW.md) records model/implementation correspondence. TLC uses finite exploration and fingerprints; it is not an unbounded inductive proof, a simulation theorem from the entire TLA specification to the whole service, or a liveness proof. PostgreSQL idempotence relies on SQL transaction and advisory-lock contracts; the model does not prove PostgreSQL itself.
 
-## 原始機能の契約
+## Primitive contracts
 
-1. 登録した鍵に対する署名の偽造困難性、HPKE/AEADの機密性と完全性、hashの衝突困難性、独立で予測できない乱数。
-2. parserが指定形式のfield意味を保存すること、Rust標準iteratorと制御フローが逐次foldと拒否伝播の意味を保存すること。SQLCipher暗号とメモリ処理、SQLiteのatomic/durable/serialized transaction、PostgreSQLの権限とtransaction契約。
-3. witness CASが線形化可能で、Vault DBとは独立に永続化され、攻撃者が両者を同時に巻き戻せないこと。
-4. OSのUID/FD/process/memory/ACL/ファイル保護、native helperと鍵登録、信頼できる新しい時計。Darwinのグループ降格はcrates/platformの最小syscall adapter（setgroups→setgid→setuid、全失敗を拒否）に閉じ込め、exec後にもUID/GID/OpenDirectory所属を検査します。このOS primitiveは直接Kaniの対象ではなく、レビューとnative隔離試験の対象です。root、OS kernel、必要な承認domainの全てが攻撃者に支配されていないこと。
-5. 管理者は受入済みのhelper・provider設定・CA・extension等を稼働中に上書きしないこと。更新はサービスを停止し、新しい世代のpath・設定を測定し再承認してから行います。DB envelopeはこれに加え、受入時のdigestを実際に読むbyte列に照合してからunwrapします。
-6. compiler、Kani/CBMC、TLC、system runtime、検証実行者とログの出所。署名は異なる鍵を示しますが、異なる人間・管理domainやログ内容の真実性を自動証明しません。
+1. Signatures under enrolled keys are unforgeable; HPKE/AEAD provide confidentiality and integrity; hashes are collision-resistant; randomness is independent and unpredictable.
+2. Parsers preserve field meanings in the specified formats; Rust standard iterators and control flow preserve sequential fold and rejection-propagation semantics. SQLCipher cryptography and memory handling, SQLite atomic/durable/serialized transactions, and PostgreSQL privilege and transaction contracts hold.
+3. Witness CAS is linearizable, persists independently of the Vault database, and cannot be rolled back by the attacker together with Vault.
+4. OS UID/FD/process/memory/ACL/file protections, native helpers and key enrollment, and fresh trusted time work as specified. Darwin group dropping is isolated in the minimal syscall adapter in crates/platform: setgroups, then setgid, then setuid, rejecting every failure. UID/GID/OpenDirectory memberships are also checked after exec. This OS primitive is subject to review and native isolation tests, not direct Kani verification. Root, the OS kernel, and all required approval domains are not under attacker control.
+5. Administrators do not overwrite accepted helpers, provider settings, CAs, extensions, or other dependencies while running. Updates stop the service, measure and reapprove new generation paths/configuration, then restart. Database envelopes additionally compare the acceptance digest against the exact bytes read before unwrap.
+6. The compiler, Kani/CBMC, TLC, system runtime, verification producer, and log provenance are trusted. Signatures distinguish keys but do not automatically prove distinct people/administrative domains or truthful log contents.
 
-これらの条件の下で、token＋DPoP鍵とAI/tool accountの任意コード実行を得ても、独立device/guardian承認を作れない攻撃者に追加の静的秘密開示を許しません。正規に渡した秘密値は利用者指定の除外です。動的秘密の発行器はその値を一時的に知るtrusted issuerです。物理鍵実験は利用者指定で除外し、非エクスポート性を実験済みとは記録しません。
+Under these conditions, an attacker with the token, DPoP key, and arbitrary code execution in the AI/tool account cannot obtain additional static-secret disclosure without creating independent device/guardian approval. Legitimately returned secret values are excluded by the requester. A dynamic-secret generator is a trusted issuer that temporarily knows the generated value. Physical-key experiments are excluded at the requester's direction; non-exportability is not recorded as experimentally verified.

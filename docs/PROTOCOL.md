@@ -1,48 +1,48 @@
-# v1プロトコル
+# Protocol v1
 
-## 静的シークレット
+## Static secrets
 
-1. クライアントでランダム256bit DEK `K` と独立256bit `A` を生成し、`B = K XOR A` とする。
-2. `vault/resource/version` をAADとしてXChaCha20-Poly1305で秘密を暗号化する。`A`はdevice公開鍵、`B`はguardian公開鍵でラップする。
-3. ownerがレコードハッシュ、subject、action、resource/version、epoch、期間、uses、DPoP JWK thumbprint、二つの署名公開鍵、recipient、instance、artifact_hashを含むgrantに署名する。
-4. `/v1/install` はowner署名を検証して新しいIDだけを登録する。`/v1/challenge` は有効なgrantに対し次のsequenceと256bit nonceを返す。challenge発行自体は秘密を開示しない。期限内のchallengeは再取得しても同じ。
-5. クライアントがtoken hash、grant hash、nonceを含むOperationを作成する。deviceとguardianが異なるdomainで同じOperationに署名する。OAuth/DPoPも同時に送る。
-6. `/v1/release` がすべての署名と束縛を検証し、witness CAS→SQLCipherトランザクションを確定して回数を消費した後、guardian側シェアだけを復号する。
-7. guardianシェアをrecipientのX25519 HPKE鍵に暗号化する。client SDKは要求とレコードを再検証し、deviceのシェアと合成してローカル復号する。
+1. The client generates a random 256-bit DEK `K` and an independent 256-bit value `A`, then computes `B = K XOR A`.
+2. Encrypt the secret with XChaCha20-Poly1305 using `vault/resource/version` as AAD. Wrap `A` with the device public key and `B` with the guardian public key.
+3. The owner signs a grant containing the record hash, subject, action, resource/version, epoch, validity period, uses, DPoP JWK thumbprint, both signing public keys, recipient, instance, and artifact_hash.
+4. `/v1/install` verifies the owner signature and registers only a new ID. `/v1/challenge` returns the next sequence and a 256-bit nonce for a valid grant. Issuing a challenge does not disclose a secret. Fetching an unexpired challenge again returns the same challenge.
+5. The client creates an Operation containing the token hash, grant hash, and nonce. The device and guardian sign the same Operation under distinct domains. OAuth and DPoP evidence accompany it.
+6. `/v1/release` verifies every signature and binding, completes witness CAS followed by the SQLCipher transaction, and consumes a use before decrypting only the guardian share.
+7. Encrypt the guardian share to the recipient's X25519 HPKE key. The client SDK revalidates the request and record, combines it with the device share, and decrypts locally.
 
-静的シークレットの平文とdeviceシェアをVaultへ送るAPIはありません。ServerのDB暗号化鍵はこのDEKとは別で、起動時にハードウェアでアンラップしSQLCipherへ渡します。DB鍵が漏れても二つのシェア保護は残ります。
+There is no API that sends static-secret plaintext or the device share to Vault. The server's database encryption key is separate from this DEK; it is unwrapped through hardware at startup and passed to SQLCipher. The two-share protection remains even if the database key leaks.
 
-## 暗号と符号化
+## Cryptography and encoding
 
-- 署名はES256、公開鍵はcompressed SEC1 33bytesのbase64url、署名は固定64bytes。JSONの型・フィールド順をRustのstruct定義で固定し、unknown fieldsを拒否する。AccessClaimsのみ追加AS claimを許可する。重複した既知fieldはserdeが拒否する。
-- 署名対象は `vault-rs/v1/<domain>\0 || serde_json(struct)`。JSON全般のJCSではない。相互運用実装は型のフィールド順、null、整数、UUID、base64url表現を一致させる必要がある。
-- P-256鍵ラップはRFC9180 DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/ChaCha20Poly1305 base mode、sequence=0のみ。labelはinfoとAADの両方に入る。HPKE senderはライブラリ、非エクスポートECDH用receiver glueは`external_kem.rs`。公式vector＋upstreamとの相互運用試験あり。
-- オプションRSA鍵ラップはRSA-3072～4096、e=65537、OAEP-SHA256/MGF1-SHA256。レコードcontext・シェアの役割をlabelに束縛。productionの秘密RSA演算はPKCS#11だけ。
-- レスポンスHPKEはX25519/HKDF-SHA256/ChaCha20Poly1305、info=`vault-rs/v1/response`、AAD=Operation hash。
-- すべての公開鍵を使う場所で型・サイズ／curveを検証。秘密／シェアのログ出力はしない。`ReleaseRequest`はtokenの誤ログを避けるためDebugを実装しない。
+- Signatures use ES256. Public keys are base64url-encoded compressed SEC1 values of 33 bytes; signatures have a fixed length of 64 bytes. Rust struct definitions fix JSON types and field order, and unknown fields are rejected. Only AccessClaims permits additional AS claims. Serde rejects duplicate known fields.
+- The signed bytes are `vault-rs/v1/<domain>\0 || serde_json(struct)`. This is not general JSON canonicalization through JCS. Interoperable implementations must match typed field order, nulls, integers, UUIDs, and base64url representations.
+- P-256 key wrapping uses RFC 9180 DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/ChaCha20Poly1305 base mode, with sequence=0 only. The label is included in both info and AAD. The HPKE sender uses the library; receiver glue for non-exportable ECDH is in `external_kem.rs`. Tests cover official vectors and upstream interoperability.
+- Optional RSA wrapping uses RSA-3072 through RSA-4096, e=65537, and OAEP-SHA256/MGF1-SHA256. The label binds the record context and share role. Production private RSA operations use PKCS#11 only.
+- Response HPKE uses X25519/HKDF-SHA256/ChaCha20Poly1305, info=`vault-rs/v1/response`, and the Operation hash as AAD.
+- Every public-key use validates its type, size, and curve. Secrets and shares are not logged. `ReleaseRequest` deliberately does not implement Debug to avoid accidental token logging.
 
 ## OAuth / DPoP profile
 
-これはOAuth Resource Serverの厳格なprofileであり、新しいAuthorization Serverではない。brokerはauthorization-code/S256 PKCE/DPoPを実装する。同意UIは接続先ASに委ねる。issuer鍵は固定し、自動JWKS rotationを行わず配置更新で切り替える。
+This is a strict OAuth Resource Server profile, not a new Authorization Server. The broker implements authorization code flow, S256 PKCE, and DPoP. The connected AS supplies the consent UI. The issuer key is pinned; key changes require a deployment update rather than automatic JWKS rotation.
 
-ASはES256 `typ=at+jwt`、固定issuer署名鍵、`iss,aud,sub,nbf,exp,scope,grant_id,cnf.jkt`を発行する。scopeは`secret:read`または`secret:issue`で、owner grantとの積集合が実効権限になる。scopeだけで秘密を選べない。
+The AS issues ES256 tokens with `typ=at+jwt`, a pinned issuer signing key, and `iss,aud,sub,nbf,exp,scope,grant_id,cnf.jkt`. Scope is `secret:read` or `secret:issue`; effective permissions are the intersection with the owner grant. Scope alone cannot select a secret.
 
-DPoPはRFC9449形式の`typ=dpop+jwt`、P-256 public JWK、`htm,htu,iat,jti,ath,nonce`を検証する。`htu`は設定されたHTTPS origin＋固定endpointから計算し、Host/X-Forwarded-*を信用しない。要求期限は30秒以下、iatは未来不可、nonceとsequenceは一度だけ消費する。HTTP Authorization/DPoPヘッダではなく、署名付きリクエストenvelopeのJSON fieldとして運ぶ独自profileなので一般的middlewareに無改造で接続できるとは扱わない。
+DPoP validation covers RFC 9449 `typ=dpop+jwt`, a public P-256 JWK, and `htm,htu,iat,jti,ath,nonce`. The expected `htu` is computed from the configured HTTPS origin and fixed endpoint; Host/X-Forwarded-* headers are not trusted. Requests live for at most 30 seconds, future iat values are rejected, and the nonce and sequence are consumed once. This custom profile carries evidence in JSON fields of a signed request envelope rather than HTTP Authorization/DPoP headers. It is not a drop-in integration with general middleware.
 
-## 動的発行
+## Dynamic issuance
 
-`action=issue` のowner grantとOperationに`IssueSpec{provider,role,ttl_seconds}`を入れる。同じ認証・署名・回数消費を通り、永続outboxからのみ`CommittedIssue`を構築する。この型は外部から生成／Deserializeできない。trusted PostgresIssuerは接続先・role policyをローカル設定で固定する。
+An owner grant and Operation with `action=issue` include `IssueSpec{provider,role,ttl_seconds}`. They undergo the same authentication, signature verification, and use consumption. `CommittedIssue` can only be constructed from the persistent outbox; external code cannot construct or Deserialize it. The trusted PostgresIssuer pins the destination and role policy in local configuration.
 
-DBトランザクションでユーザー作成・権限付与と暗号化したreceiptの保存を同時に行う。要求ハッシュで冪等化し、同じpending要求だけを有効期限内に再試行できる。完了後のリプレイは拒否する。応答を失った場合の完了receipt再取得APIはない。未完了・期限切れoutboxは自動で回数を戻さず、ownerによる失効／新grantが必要。
+A database transaction creates the user, grants privileges, and stores an encrypted receipt atomically. The request hash provides idempotence; only the same pending request may be retried before expiry. Replays after completion are rejected. There is no API to retrieve a completed receipt after a response is lost. An incomplete or expired outbox does not automatically restore a use; the owner must revoke it and authorize a new grant.
 
-生成器と対象PostgreSQLは発行するpasswordを一時的に知る。動的シークレットでは生成器自体がE2Eの端点であり、「生成器さえ秘密を知らない」ことは保証しない。provider接続設定は`protect-config`で暗号化し、起動時だけハードウェアで開く。
+The issuer and target PostgreSQL server temporarily know the issued password. For dynamic secrets, the issuer is itself an E2E endpoint; the design does not claim to hide the secret from its generator. Provider connection settings are encrypted with `protect-config` and opened through hardware only at startup.
 
-ユーザーは`NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`、登録されたroleの権限のみ。固定roleが強すぎれば発行ユーザーも強くなるため、実権限の試験が必要。失効はNOLOGIN、既存session termination、DROP ROLE、tombstone。TTLはDBのVALID UNTILとexpiry workerで処理する。worker停止中も新規ログインは期限切れになるが、既存セッションの強制終了はworkerの生存に依存する。
+Issued users have `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` and only the registered role's privileges. A role with excessive privileges produces an overly privileged user, so actual privilege tests are necessary. Revocation applies NOLOGIN, terminates existing sessions, drops the role, and records a tombstone. TTL enforcement uses database VALID UNTIL and an expiry worker. New logins expire even while the worker is stopped, but termination of existing sessions depends on the worker remaining alive.
 
-Wasm proposal extensionは`wasmi`で実行します。host import/WASIなし、memory 64KiB、fuel 100000、module 128KiB、JSON 4096bytesまで。`memory`と`propose(i32 pointer,i32 length)->i64`をexportし、戻り値の上位32bitは出力pointer、下位32bitはlengthです。出力IssueSpecは署名された入力と一致しなければ拒否します。管理用資格情報・filesystem・networkをextensionへ渡しません。新しいproviderの管理操作はtrusted adapterとして別途レビューが必要です。
+Wasm proposal extensions run in `wasmi`: no host imports or WASI, at most 64 KiB of memory, 100000 fuel, a 128 KiB module, and 4096 bytes of JSON. A module exports `memory` and `propose(i32 pointer,i32 length)->i64`; the upper 32 bits of the return value encode the output pointer and the lower 32 bits encode its length. The output IssueSpec must match the signed input. Extensions receive no administrative credentials, filesystem access, or network access. Administrative operations for a new provider require a separately reviewed trusted adapter.
 
-## 実行と復旧
+## Execution and recovery
 
-brokerは他の認可とguardian署名を確認してからdevice署名を要求します。期限の再確認をHTTP応答前に行い、hardware/DB/witness待機中に期限を超えた応答を返しません。動的発行で期限を超えた場合は発行済みleaseの失効を試みます。provider停止時の既存sessionについては前述の制限があります。
+The broker verifies other authorization evidence and the guardian signature before requesting a device signature. Expiry is rechecked before the HTTP response; a response that expired while waiting for hardware, the database, or the witness is not returned. If dynamic issuance exceeds the deadline, the issuer attempts to revoke the issued lease. Existing sessions during a provider outage remain subject to the limitation above.
 
-`/v1/checkpoint`はowner署名済みGrantに対して独立witness値を返します。owner-quarantine署名された`{vault,grant,expected}`を`/v1/quarantine`へ送ると、そのcheckpointに対するCASが成功した場合だけIDを永久廃止します。残り回数の再付与・witnessの巻き戻しは行いません。
+`/v1/checkpoint` returns the independent witness value for an owner-signed Grant. Sending owner-quarantine-signed `{vault,grant,expected}` to `/v1/quarantine` permanently retires the ID only if CAS against that checkpoint succeeds. It neither restores remaining uses nor rolls back the witness.
