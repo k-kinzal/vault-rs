@@ -1,0 +1,1 @@
+{"name":"vault-rs-oidc-integration","private":true,"type":"module","version":"1.0.0","dependencies":{"oidc-provider":"9.13.3"}}

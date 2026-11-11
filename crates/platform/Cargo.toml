@@ -1,0 +1,16 @@
+[package]
+name = "vault-platform"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+# The sole unsafe boundary is the explicitly annotated Darwin syscall adapter.
+# Product and policy crates retain workspace unsafe_code = forbid.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"

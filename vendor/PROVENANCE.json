@@ -1,0 +1,10 @@
+{
+  "crate": "libsqlite3-sys",
+  "version": "0.39.1",
+  "upstream_archive_sha256": "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3",
+  "changes": [
+    "Cargo.toml: sqlcipher-src =419.0.6 -> =420.0.0; SQLite 3.53.4 -> 3.54.1 fixes CVE-2026-119375",
+    "Removed Cargo local cache metadata only"
+  ],
+  "crypto_or_sqlite_code_changes": false
+}

@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Check the finite model and require counterexamples for weakened controls."""
+import argparse, hashlib, json, pathlib, subprocess, tempfile
+
+root=pathlib.Path(__file__).resolve().parents[1]
+parser=argparse.ArgumentParser();parser.add_argument("--output",type=pathlib.Path,required=True);args=parser.parse_args()
+args.output.mkdir(parents=True,exist_ok=True)
+jar=root/".tools/tla2tools.jar"
+assert hashlib.sha256(jar.read_bytes()).hexdigest()=="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88", "unexpected TLC binary"
+cfg=(root/"formal/Vault.cfg").read_text()
+cases=[("baseline",None,None),
+ ("without-guardian","RequireGuardian","NoUnauthorizedRelease"),
+ ("without-device","RequireDevice","NoUnauthorizedRelease"),
+ ("without-witness","RequireWitness","CommitBeforeDisclosure"),
+ ("without-nonce","RequireNonce","NoUnauthorizedRelease"),
+ ("release-before-commit","CommitBeforeRelease","CommitBeforeDisclosure"),
+ ("without-idempotence","RequireIdempotence","OneCredentialPerOperation"),
+ ("honest-release",None,"NoHonestStaticRelease"),
+ ("identical-issue-retry",None,"NoIdenticalIssueRetry"),
+ ("admin-crash-recovery",None,"NoRecoveredAdminCrash")]
+
+results=[]
+for name,flag,expected in cases:
+    with tempfile.TemporaryDirectory(prefix="vault-model-") as temp:
+        config=pathlib.Path(temp)/"Model.cfg"
+        case_config=cfg if flag is None else cfg.replace(f"{flag} = TRUE",f"{flag} = FALSE")
+        if expected and flag is None: case_config += f"\nINVARIANT {expected}\n"
+        config.write_text(case_config)
+        (pathlib.Path(temp)/"Vault.tla").write_bytes((root/"formal/Vault.tla").read_bytes())
+        command=["java",f"-Djava.io.tmpdir={temp}","-XX:+UseParallelGC","-Xmx1g","-cp",str(jar),"tlc2.TLC","-workers","2","-metadir",temp+"/states","-config","Model.cfg","Vault.tla"]
+        result=subprocess.run(command,cwd=temp,capture_output=True,text=True,timeout=300)
+        output=result.stdout+result.stderr
+        (args.output/(name+".log")).write_text(output)
+        if expected:
+            ok=result.returncode!=0 and f"Invariant {expected} is violated" in output
+        else:
+            ok=result.returncode==0 and "Model checking completed. No error has been found." in output
+        results.append({"case":name,"exit_code":result.returncode,"expected_counterexample":expected,"passed":ok})
+        print(name, "PASS" if ok else "FAIL")
+        if not ok: print(output[-3000:])
+(args.output/"model-results.json").write_text(json.dumps(results,indent=2)+"\n")
+raise SystemExit(0 if all(r["passed"] for r in results) else 1)

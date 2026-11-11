@@ -1,0 +1,15 @@
+/target/
+/.tools/
+/formal/states/
+/formal/*.out
+/evidence/runs/
+/evidence/current
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+/states/
+*.key-envelope.json
+__pycache__/
+
+*.db.lock

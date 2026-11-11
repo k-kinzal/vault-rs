@@ -1,0 +1,36 @@
+{
+  "origin": "https://REPLACE_WITH_INDEPENDENT_CUSTODIAN/",
+  "listen": "0.0.0.0:443",
+  "certificate": "/etc/vault-rs/custodian.crt",
+  "tls_signing": {
+    "usage": "service",
+    "helper": "/usr/local/libexec/vault-native-key",
+    "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
+    "key_id": "custodian-tls",
+    "public_key": "REPLACE_WITH_BASE64URL_COMPRESSED_P256_PUBLIC_KEY"
+  },
+  "custodian_keys": [
+    {
+      "key_id": "guardian-ecdh",
+      "native": {
+        "usage": "service",
+        "helper": "/usr/local/libexec/vault-native-key",
+        "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
+        "key_id": "guardian-ecdh",
+        "public_key": "p256:REPLACE_WITH_BASE64URL_UNCOMPRESSED_P256_PUBLIC_KEY"
+      },
+      "guest": {
+        "product": "milan",
+        "measurement": "REPLACE_WITH_INDEPENDENTLY_COMPUTED_96_HEX_LAUNCH_MEASUREMENT",
+        "minimum_tcb": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "vcek": "/etc/vault-rs/vcek.pem",
+        "expires_at": 0
+      }
+    }
+  ]
+}

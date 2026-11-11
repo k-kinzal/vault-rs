@@ -1,0 +1,8 @@
+{
+  "release_key": "REPLACE_WITH_PINNED_RELEASE_PUBLIC_KEY",
+  "review_key": "REPLACE_WITH_INDEPENDENT_REVIEW_PUBLIC_KEY",
+  "deployment_key": "REPLACE_WITH_DEPLOYMENT_AUTHORITY_PUBLIC_KEY",
+  "minimum_epoch": 1,
+  "maximum_age_seconds": 86400,
+  "allow_physical_test_exclusion": true
+}

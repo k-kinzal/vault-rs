@@ -1,0 +1,25 @@
+//! Dual-authorized ciphertext service. See docs/ASSURANCE.md for verified scope.
+pub mod approval;
+pub mod attestation;
+pub mod broker;
+pub mod client;
+pub mod confidential;
+pub mod crypto;
+pub mod extension;
+pub mod extension_host;
+pub mod external_kem;
+#[cfg(feature = "pkcs11")]
+pub mod hardware;
+pub mod keys;
+pub mod native;
+pub mod native_tls;
+pub mod oauth;
+pub mod protocol;
+pub mod provisioning;
+pub mod readiness;
+pub mod runner;
+pub mod server;
+pub mod service_config;
+pub mod storage;
+pub mod store;
+pub mod witness;

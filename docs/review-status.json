@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "review_kind": "independent_agent_source_review",
+  "report": "docs/REVIEW.md",
+  "unresolved_findings": [],
+  "scope": "Authorization, storage generation, native role/TLS changes and confidential RPC/image/provisioning bounded source review; conditional guarantees retain explicit platform/crypto/time/custodian contracts; not hardware evidence or whole-service certification",
+  "supplemental_reports": [
+    "docs/reviews/MEMORY_GUARANTEE_REVIEW.md",
+    "docs/reviews/SNP_REVIEW.md",
+    "docs/reviews/CONFIDENTIAL_INTEGRATION_REVIEW.md"
+  ]
+}

@@ -1,0 +1,40 @@
+# Machine verification and implementation correspondence
+
+The current confidential-service profile and exact affirmative guarantees are defined in [GUARANTEES.md](GUARANTEES.md). Mac/Linux brokers use the same independent Linux SNP service. Host-memory protection excludes the independently trusted key custodian, guest kernel/application compromise and the other explicit primitive contracts there. Prior resident-key evidence does not cover this stronger profile.
+
+
+The proof targets are `crates/policy/src/lib.rs` and `wire.rs`, which the product uses directly. Under the contracts below for cryptographic, OS, and database primitives, verification covers authorization decisions, field correspondence, and disclosure ordering. Proven properties, finite exploration, execution tests, and trusted primitives are distinguished.
+
+## Production code checked directly
+
+- Success of `consume` is equivalent to the conjunction of all authorization evidence, record binding, witness, non-revoked/unlocked status, epoch/sequence, validity interval, remaining uses, and absence of overflow. Success decrements remaining uses by one, increments sequence by one, and preserves every other field. Checks cover the full bit widths of State and Request.
+- `authorize_and_commit` calls persist only after authorization and returns `Committed<T>` only after persistence succeeds. `ordered_commit` calls database commit only after witness success. For arbitrary state, request, evidence, and success/failure of both persistence operations, disclosure eligibility, ordering, and counts agree with the declarative specification. Changes that always deny are also detected.
+- Grant/Operation/Challenge/Trust/RecordContext/AccessClaims/DpopClaims share type definitions between the production service and proofs. Owner, record, challenge, executable/recipient/instance, OAuth subject/audience/grant/scope/expiry, and DPoP key/nonce/target/method/token hash/time are compared directly from actual fields. No conversion to a manually assembled Binding is assumed.
+- `Operation::request` directly checks the actual epoch/sequence/not_before/expires/now fields. The database Ledger embeds policy State unchanged and stores the complete returned State.
+- ScopeSet parses up to 256 bytes of RFC 6749 ASCII scope grammar and grants permissions only for recognized complete tokens. The actual step/finish functions are compared against an independent trie specification through three machine-checked lemmas: initialization, state preservation or simultaneous rejection for every byte, and finalization. Structural induction over sequential fold and rejection propagation covers arbitrary finite input, including the full 256-byte domain. This is not recorded as a successful Kani run comparing two separately unrolled complete loops. SCOPE_PROOF.md describes correspondence and induction. Unknown scopes confer no permissions.
+- Request expiry is the minimum of grant expiry, challenge expiry, the actual signed access token's expiry, and a maximum of 30 seconds. Current time is rechecked after device unwrap and immediately before workload launch.
+- The actual 32-byte `split32` / `join32` operations, including every indexed step, are checked for reconstruction and consistency with any candidate secret. Uniform randomness and cryptographic security do not follow from this algebraic result.
+- Verification covers UID allocation, permanent retirement, time-interval overflow, completeness of acceptance methods, and physical-test exclusion for G04/G05 only.
+
+Generic equality proofs are instantiated with types such as u128. Eq implementations for UUID/String/IssueSpec and similar types are assumed to behave as equality relations. This does not prove all of serde's construction of those types from JSON. Kani/CBMC and the soundness of Rust translation are part of the trusted base.
+
+`Committed` has no public fields, Clone, or Deserialize, and is consumed by release. Compile-fail tests cover external construction and double consumption. The type alone cannot prevent a trusted Rust caller from supplying false Evidence or a dishonest persist closure. Source review and adapter fault tests check that HTTP input cannot construct these values or closures and that all disclosure paths pass through protocol verification and the controller.
+
+## Finite-state model
+
+TLC explores one already-installed grant, four request identities, two uses, two challenge issuances, two administrator operations, and two attempts at the same dynamic issuance. It includes challenge reuse/replacement, nonces, separate witness reservation and database commit, concurrent requests, intermediate crashes, restoration of past database generations, crashes during revoke/quarantine, and pending-issue retries and completion.
+
+Checks cover TypeOK, NoUnauthorizedRelease, NoReplay, BoundedRelease, CommitBeforeDisclosure, and OneCredentialPerOperation. The specification permits retransmission of the same dynamic lease but rejects sequence reuse across different operations. Six weakened conditions for device/guardian/witness/nonce/commit ordering/idempotence must produce named counterexamples. Coverage also checks an authorized read, two replies to an identical issue, and quarantine after a crash following administrator reservation, avoiding vacuous success through blanket denial.
+
+[REVIEW.md](REVIEW.md) records model/implementation correspondence. TLC uses finite exploration and fingerprints; it is not an unbounded inductive proof, a simulation theorem from the entire TLA specification to the whole service, or a liveness proof. PostgreSQL idempotence relies on SQL transaction and advisory-lock contracts; the model does not prove PostgreSQL itself.
+
+## Primitive contracts
+
+1. Signatures under enrolled keys are unforgeable; HPKE/AEAD provide confidentiality and integrity; hashes are collision-resistant; randomness is independent and unpredictable.
+2. Parsers preserve field meanings in the specified formats; Rust standard iterators and control flow preserve sequential fold and rejection-propagation semantics. SQLCipher cryptography and memory handling, SQLite atomic/durable/serialized transactions, and PostgreSQL privilege and transaction contracts hold.
+3. Witness CAS is linearizable, persists independently of the Vault database, and cannot be rolled back by the attacker together with Vault.
+4. OS UID/FD/process/memory/ACL/file protections, native helpers and key enrollment, and fresh trusted time work as specified. Darwin group dropping is isolated in the minimal syscall adapter in crates/platform: setgroups, then setgid, then setuid, rejecting every failure. UID/GID/OpenDirectory memberships are also checked after exec. This OS primitive is subject to review and native isolation tests, not direct Kani verification. Root, the OS kernel, and all required approval domains are not under attacker control.
+5. Administrators do not overwrite accepted helpers, provider settings, CAs, extensions, or other dependencies while running. Updates stop the service, measure and reapprove new generation paths/configuration, then restart. Database envelopes additionally compare the acceptance digest against the exact bytes read before unwrap.
+6. The compiler, Kani/CBMC, TLC, system runtime, verification producer, and log provenance are trusted. Signatures distinguish keys but do not automatically prove distinct people/administrative domains or truthful log contents.
+
+Under these conditions, an attacker with the token, DPoP key, and arbitrary code execution in the AI/tool account cannot obtain additional static-secret disclosure without creating independent device/guardian approval. Legitimately returned secret values are excluded by the requester. A dynamic-secret generator is a trusted issuer that temporarily knows the generated value. Physical-key experiments are excluded at the requester's direction; non-exportability is not recorded as experimentally verified.

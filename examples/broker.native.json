@@ -1,0 +1,43 @@
+{
+  "trust": {
+    "vault": "00000000-0000-0000-0000-000000000001",
+    "audience": "https://localhost:8443",
+    "issuer": "https://REPLACE_WITH_AUTHORIZATION_SERVER",
+    "issuer_public_key": "REPLACE_WITH_PINNED_ISSUER_KEY",
+    "owner_public_key": "REPLACE_WITH_PINNED_OWNER_KEY"
+  },
+  "subject": "REPLACE_WITH_OAUTH_SUBJECT",
+  "record": "/etc/vault-rs/record.json",
+  "bundle": "/etc/vault-rs/tool.bundle.json",
+  "staging_directory": "/var/lib/vault-rs/workloads",
+  "ai_uid": 1000,
+  "uid_base": 10000,
+  "uid_limit": 1000000,
+  "timeout_seconds": 60,
+  "device_signing": {
+    "helper": "/usr/local/libexec/vault-native-key",
+    "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
+    "key_id": "device-sign",
+    "public_key": "REPLACE_WITH_REGISTERED_PUBLIC_KEY",
+    "usage": "interactive"
+  },
+  "device_decryption": {
+    "helper": "/usr/local/libexec/vault-native-key",
+    "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
+    "key_id": "device-ecdh",
+    "public_key": "p256:REPLACE_WITH_REGISTERED_PUBLIC_KEY",
+    "usage": "interactive"
+  },
+  "allocator_signing": {
+    "helper": "/usr/local/libexec/vault-native-key",
+    "helper_sha256": "REPLACE_WITH_VERIFIED_HELPER_SHA256",
+    "key_id": "allocator-sign",
+    "public_key": "REPLACE_WITH_REGISTERED_PUBLIC_KEY",
+    "usage": "service"
+  },
+  "allocator_namespace": "00000000-0000-0000-0000-000000000002",
+  "allocator_url": "https://REPLACE_WITH_DEDICATED_ALLOCATOR/v1/witness",
+  "allocator_public_key": "REPLACE_WITH_PINNED_ALLOCATOR_KEY",
+  "ca": "/etc/vault-rs/vault-ca.pem",
+  "allocator_ca": "/etc/vault-rs/allocator-ca.pem"
+}
